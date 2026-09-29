@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+build/
+
+# local config / secrets
+.env
+.env.*
+!.env.example
+config.local.json
+secrets.json
+credentials.json
+
+# logs
+*.log
+
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# SiYuan plugin development output
+package.zip
