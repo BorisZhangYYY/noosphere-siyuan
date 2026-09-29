@@ -1,0 +1,45 @@
+name: Repository Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  repository-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(README.md LICENSE AGENTS.md CLAUDE.md TODO.md CHANGELOG.md)
+          for file in "${required[@]}"; do
+            test -f "$file" || { echo "Missing required file: $file"; exit 1; }
+          done
+
+      - name: Reject unresolved template placeholders
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R --line-number --exclude-dir=.git '{{[A-Za-z0-9_][A-Za-z0-9_]*}}' README.md CLAUDE.md TODO.md CHANGELOG.md AGENTS.md 2>/dev/null; then
+            echo "Unresolved AI-ProjConf template placeholders found."
+            exit 1
+          fi
+
+      - name: Reject common secret files
+        shell: bash
+        run: |
+          set -euo pipefail
+          forbidden=(.env config.local.json secrets.json credentials.json)
+          for file in "${forbidden[@]}"; do
+            if git ls-files --error-unmatch "$file" >/dev/null 2>&1; then
+              echo "Forbidden tracked secret/local config file: $file"
+              exit 1
+            fi
+          done
