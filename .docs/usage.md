@@ -4,7 +4,7 @@
 
 - 思源笔记 3.7.0 或更新版本（桌面版、Docker 或桌面浏览器前端）。
 - 可访问 Firecrawl API 的网络和 Firecrawl API Key。
-- 只有使用 AI 审阅时才需要兼容 OpenAI Chat Completions 的模型服务、模型名称和 API Key。
+- 只有使用 AI 审阅时才需要兼容 OpenAI Chat Completions 或 Anthropic Messages 的模型服务、模型名称和 API Key。
 
 ## 本地安装
 
@@ -14,7 +14,7 @@
 
 ## 采集文章
 
-1. 展开“服务配置”，填写 Firecrawl API Key 并保存。若要 AI 审阅，还需填写模型 API 地址、API Key、模型名称；默认地址为 `https://api.openai.com/v1`。
+1. 展开“服务配置”，填写 Firecrawl API Key 并保存。若要 AI 审阅，还需填写模型 API 地址、API Key、模型名称及接口格式；默认地址为 `https://api.openai.com/v1`。Anthropic Messages 接口可设置 API 版本，默认 `2023-06-01`。
 2. 输入文章 URL，填写目标思源文档 ID，或点击“使用当前文档”。目标必须是**文档**，不是普通段落块。
 3. 点击“抓取预览”，检查正文。正文可以直接在预览框中修改。
 4. 可选：点击“AI 审阅”并检查模型返回内容。

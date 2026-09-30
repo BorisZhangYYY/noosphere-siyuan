@@ -1,6 +1,7 @@
 .noosphere { padding: 16px 20px 22px; display: grid; gap: 14px; max-height: 76vh; overflow: auto; }
 .noosphere label { display: grid; gap: 6px; min-width: 0; color: var(--b3-theme-on-background); font-size: 13px; }
 .noosphere .b3-text-field { width: 100%; box-sizing: border-box; }
+.noosphere .b3-select { width: 100%; box-sizing: border-box; }
 .noosphere textarea { resize: vertical; line-height: 1.5; }
 .noosphere__row { display: flex; align-items: end; gap: 8px; }
 .noosphere__row label { flex: 1; }

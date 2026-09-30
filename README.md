@@ -14,7 +14,7 @@ Noosphere for SiYuan 面向思源笔记用户，将网页内容抓取、正文�
 
 - **独立运行**：安装 SiYuan 插件即可使用，不依赖 Noosphere Server。
 - **内容摄取**：从 URL 抓取正文、元数据与图片，并整理为适合知识库保存的内容。
-- **AI Review**：通过可配置的 OpenAI Chat Completions 兼容模型审阅正文，也可跳过此步手动编辑。
+- **AI Review**：通过可配置的 OpenAI Chat Completions 或 Anthropic Messages 兼容模型审阅正文，也可跳过此步手动编辑。
 - **知识落库**：将处理后的文章直接追加到指定思源文档 ID。
 - **可扩展架构**：Crawler、LLM Provider、Review Pipeline 与 SiYuan Writer 保持模块化。
 
@@ -44,7 +44,7 @@ SiYuan Document
 
 - [x] 初始化可构建的 SiYuan 插件工程
 - [x] 使用 Firecrawl 抓取 URL 正文与元数据
-- [x] 配置兼容 OpenAI 的模型、API 地址与审阅指令
+- [x] 配置兼容 OpenAI Chat 或 Anthropic Messages 的模型、API 地址与审阅指令
 - [x] 抓取预览、手动编辑、可选 AI 审阅
 - [x] 图片本地化；失败时保留原链接
 - [x] 写入指定思源文档 ID 或当前打开的文档

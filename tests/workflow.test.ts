@@ -2,10 +2,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { scrapeWithFirecrawl } from "../src/crawler/firecrawl";
 import { appendArticle } from "../src/siyuan/writer";
 import { localizeMarkdownImages } from "../src/images/localize";
+import { composeArticle } from "../src/article/compose";
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("article pipeline", () => {
+  it("uses the reviewed title once when the draft begins with a heading", () => {
+    const markdown = composeArticle(
+      { url: "https://example.com/post", title: "Article - Site", markdown: "# Article\n\nBody" },
+      "# Article\n\nBody",
+    );
+    expect(markdown.match(/^# Article$/gm)).toHaveLength(1);
+    expect(markdown).toContain("> 来源：<https://example.com/post>");
+    expect(markdown).toContain("Body");
+  });
+
   it("captures the main article through the SiYuan proxy", async () => {
     const fetchMock = vi.fn(async (_path: string, options: RequestInit) => {
       const request = JSON.parse(options.body as string);

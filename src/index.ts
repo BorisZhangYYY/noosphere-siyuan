@@ -1,7 +1,7 @@
 /** SiYuan frontend plugin entry and capture workflow. */
 import { Dialog, Plugin, getActiveEditor, showMessage } from "siyuan";
 import { scrapeWithFirecrawl } from "./crawler/firecrawl";
-import { reviewArticle } from "./review/openai";
+import { reviewArticle } from "./review/provider";
 import { localizeMarkdownImages } from "./images/localize";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { DEFAULT_SETTINGS, type Article, type Settings } from "./types";
@@ -48,6 +48,8 @@ export default class NoospherePlugin extends Plugin {
           <label>模型 API 地址<input data-field="modelBaseUrl" class="b3-text-field" type="url" placeholder="https://api.openai.com/v1"></label>
           <label>模型 API Key<input data-field="modelKey" class="b3-text-field" type="password" autocomplete="off"></label>
           <label>模型名称<input data-field="modelName" class="b3-text-field" placeholder="例如 gpt-4.1-mini"></label>
+          <label>模型接口格式<select data-field="modelFormat" class="b3-select"><option value="openai_chat">OpenAI Chat Completions</option><option value="anthropic">Anthropic Messages</option></select></label>
+          <label>Anthropic API 版本<input data-field="anthropicVersion" class="b3-text-field" placeholder="2023-06-01"></label>
           <label>审阅指令<textarea data-field="reviewPrompt" class="b3-text-field" rows="4"></textarea></label>
           <label class="noosphere__check"><input data-field="localizeImages" type="checkbox">写入前将图片保存到思源</label>
           <button data-action="settings" class="b3-button b3-button--outline" type="button">保存配置</button>
@@ -56,7 +58,7 @@ export default class NoospherePlugin extends Plugin {
     });
     const root = dialog.element.querySelector<HTMLElement>(".noosphere");
     if (!root) return;
-    const field = <T extends HTMLInputElement | HTMLTextAreaElement>(name: string): T => {
+    const field = <T extends HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(name: string): T => {
       const element = root.querySelector<T>(`[data-field="${name}"]`);
       if (!element) throw new Error(`缺少输入项：${name}`);
       return element;
@@ -66,9 +68,10 @@ export default class NoospherePlugin extends Plugin {
     const inputUrl = field<HTMLInputElement>("url");
     const target = field<HTMLInputElement>("targetDocumentId");
     target.value = this.settings.targetDocumentId;
-    for (const name of ["firecrawlKey", "modelBaseUrl", "modelKey", "modelName", "reviewPrompt"] as const) {
+    for (const name of ["firecrawlKey", "modelBaseUrl", "modelKey", "modelName", "anthropicVersion", "reviewPrompt"] as const) {
       field(name).value = this.settings[name];
     }
+    field<HTMLSelectElement>("modelFormat").value = this.settings.modelFormat;
     field<HTMLInputElement>("localizeImages").checked = this.settings.localizeImages;
     inputUrl.addEventListener("input", () => { article = null; markdown.value = ""; });
 
@@ -77,6 +80,8 @@ export default class NoospherePlugin extends Plugin {
       modelBaseUrl: field("modelBaseUrl").value,
       modelKey: field("modelKey").value,
       modelName: field("modelName").value,
+      modelFormat: field<HTMLSelectElement>("modelFormat").value as Settings["modelFormat"],
+      anthropicVersion: field("anthropicVersion").value,
       reviewPrompt: field("reviewPrompt").value,
       localizeImages: field<HTMLInputElement>("localizeImages").checked,
       targetDocumentId: target.value,
