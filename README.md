@@ -14,8 +14,8 @@ Noosphere for SiYuan 面向思源笔记用户，将网页内容抓取、正文�
 
 - **独立运行**：安装 SiYuan 插件即可使用，不依赖 Noosphere Server。
 - **内容摄取**：从 URL 抓取正文、元数据与图片，并整理为适合知识库保存的内容。
-- **AI Review**：通过可配置 LLM Provider 对内容进行总结、解释、翻译或结构化 Review。
-- **知识落库**：将处理后的文章直接写入指定 SiYuan Notebook / 文档位置。
+- **AI Review**：通过可配置的 OpenAI Chat Completions 兼容模型审阅正文，也可跳过此步手动编辑。
+- **知识落库**：将处理后的文章直接追加到指定思源文档 ID。
 - **可扩展架构**：Crawler、LLM Provider、Review Pipeline 与 SiYuan Writer 保持模块化。
 
 ## 适用场景
@@ -40,30 +40,30 @@ Image Localization
 SiYuan Document
 ```
 
-## V0.1 路线图
+## V0.1 MVP
 
-- [ ] 初始化 SiYuan 插件工程
-- [ ] URL 内容抓取
-- [ ] Crawler Adapter
-- [ ] LLM Provider 配置
-- [ ] Perspective / Review 模板
-- [ ] 图片本地化
-- [ ] 指定 SiYuan 保存位置
-- [ ] 完成状态与错误提示
+- [x] 初始化可构建的 SiYuan 插件工程
+- [x] 使用 Firecrawl 抓取 URL 正文与元数据
+- [x] 配置兼容 OpenAI 的模型、API 地址与审阅指令
+- [x] 抓取预览、手动编辑、可选 AI 审阅
+- [x] 图片本地化；失败时保留原链接
+- [x] 写入指定思源文档 ID 或当前打开的文档
+- [x] 阶段状态与错误提示
+
+安装和使用步骤见 [.docs/usage.md](.docs/usage.md)。
 
 ## 项目结构
 
-项目当前处于初始化阶段，后续预计按以下职责拆分：
+首版按以下职责拆分：
 
 ```text
 noosphere-siyuan/
 ├── src/
 │   ├── crawler/       # 内容抓取 Adapter
-│   ├── parser/        # 内容解析与标准化
-│   ├── review/        # LLM Provider 与 Review Pipeline
-│   ├── article/       # Article Schema 与文档组装
+│   ├── review/        # LLM Provider 与审阅
+│   ├── article/       # 文档组装
 │   ├── images/        # 图片下载与本地化
-│   └── siyuan/        # SiYuan API 与 Block/Document 写入
+│   └── siyuan/        # SiYuan API 与文档写入
 ├── .docs/             # 面向使用者的文档
 ├── .project/          # 仓库内部开发规范与设计记录
 ├── CLAUDE.md
