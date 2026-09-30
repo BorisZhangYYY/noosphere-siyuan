@@ -40,7 +40,9 @@ Image Localization
 SiYuan Document
 ```
 
-## V0.1 MVP
+## v0.1.0 MVP 预览版
+
+本版通过 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 提供安装包，暂不在思源集市发布。采集窗口的完整交互链路仍需继续验证，已知问题记录在 [TODO.md](TODO.md)。
 
 - [x] 初始化可构建的 SiYuan 插件工程
 - [x] 使用 Firecrawl 抓取 URL 正文与元数据

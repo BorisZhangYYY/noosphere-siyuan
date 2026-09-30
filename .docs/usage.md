@@ -8,7 +8,9 @@
 
 ## 本地安装
 
-在项目目录执行 `npm install` 和 `npm run package`。生成的 `package.zip` 是思源插件包；也可将 `dist/` 中的内容复制到思源工作空间的 `data/plugins/noosphere-siyuan/`。启用插件后，按 `⌥⇧⌘N` 打开采集窗口；也可在命令面板搜索“知流：采集网页文章”，或点击顶部工具栏靠右的链环图标（悬停提示“知流 · 采集文章”）。如果顶部按钮被隐藏，可在工具栏的显隐菜单中打开。
+从 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 下载 `noosphere-siyuan-v0.1.0.zip`，解压到思源工作空间的 `data/plugins/noosphere-siyuan/`。本版暂不在思源集市提供安装。
+
+也可在项目目录执行 `npm install` 和 `npm run package`，再将生成的 `package.zip` 解压到同一目录。启用插件后，按 `⌥⇧⌘N` 打开采集窗口；也可在命令面板搜索“知流：采集网页文章”，或点击顶部工具栏靠右的链环图标（悬停提示“知流 · 采集文章”）。如果顶部按钮被隐藏，可在工具栏的显隐菜单中打开。
 
 开发时可运行 `npm run build`，然后把 `dist/` 内容放入上述插件目录并重新加载思源界面。
 
