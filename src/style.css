@@ -1,0 +1,14 @@
+.noosphere { padding: 16px 20px 22px; display: grid; gap: 14px; max-height: 76vh; overflow: auto; }
+.noosphere label { display: grid; gap: 6px; min-width: 0; color: var(--b3-theme-on-background); font-size: 13px; }
+.noosphere .b3-text-field { width: 100%; box-sizing: border-box; }
+.noosphere .b3-select { width: 100%; box-sizing: border-box; }
+.noosphere textarea { resize: vertical; line-height: 1.5; }
+.noosphere__row { display: flex; align-items: end; gap: 8px; }
+.noosphere__row label { flex: 1; }
+.noosphere__row button { white-space: nowrap; }
+.noosphere__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.noosphere__status { margin: 0; min-height: 20px; color: var(--b3-theme-on-surface); overflow-wrap: anywhere; }
+.noosphere__settings { border-top: 1px solid var(--b3-border-color); padding-top: 12px; }
+.noosphere__settings summary { cursor: pointer; margin-bottom: 12px; }
+.noosphere__settings[open] { display: grid; gap: 12px; }
+.noosphere__check { display: flex !important; align-items: center; gap: 8px !important; }

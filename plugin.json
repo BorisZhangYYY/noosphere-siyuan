@@ -1,0 +1,13 @@
+{
+  "name": "noosphere-siyuan",
+  "author": "BorisZhangYYY",
+  "url": "https://github.com/BorisZhangYYY/noosphere-siyuan",
+  "version": "0.1.0",
+  "minAppVersion": "3.7.0",
+  "backends": ["windows", "linux", "darwin", "docker"],
+  "frontends": ["desktop", "desktop-window", "browser-desktop"],
+  "displayName": { "default": "Noosphere for SiYuan", "zh-CN": "知流" },
+  "description": { "default": "Capture, review and save web articles in SiYuan", "zh-CN": "抓取、审阅并保存网页文章到思源" },
+  "readme": { "default": "README.md", "zh-CN": "README.md" },
+  "keywords": ["web clipper", "AI", "文章采集"]
+}
