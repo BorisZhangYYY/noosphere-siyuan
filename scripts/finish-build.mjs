@@ -5,6 +5,8 @@ await mkdir("dist/.docs", { recursive: true });
 
 await Promise.all([
   copyFile("plugin.json", "dist/plugin.json"),
+  copyFile("icon.png", "dist/icon.png"),
+  copyFile("icon.svg", "dist/icon.svg"),
   copyFile("README.md", "dist/README.md"),
   copyFile(".docs/usage.md", "dist/.docs/usage.md"),
 ]);

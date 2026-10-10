@@ -42,8 +42,8 @@ export async function proxyRequest(
   if (data.status < 200 || data.status >= 300) {
     let detail = data.body.slice(0, 240);
     try {
-      const error = JSON.parse(data.body) as { error?: string; message?: string };
-      detail = error.error || error.message || detail;
+      const error = JSON.parse(data.body) as { error?: string | { message?: string }; message?: string };
+      detail = (typeof error.error === "string" ? error.error : error.error?.message) || error.message || detail;
     } catch { /* Keep the response snippet when it is not JSON. */ }
     throw new Error(`上游服务返回 HTTP ${data.status}：${detail}`);
   }

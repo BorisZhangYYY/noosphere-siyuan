@@ -14,7 +14,7 @@ Noosphere for SiYuan 面向思源笔记用户，将网页内容抓取、正文�
 
 - **独立运行**：安装 SiYuan 插件即可使用，不依赖 Noosphere Server。
 - **内容摄取**：从 URL 抓取正文、元数据与图片，并整理为适合知识库保存的内容。
-- **AI Review**：通过可配置的 OpenAI Chat Completions 或 Anthropic Messages 兼容模型审阅正文，也可跳过此步手动编辑。
+- **AI Review**：按供应商配置模型；支持自定义视角、文章格式和可选的图片审阅，也可跳过 AI 直接编辑正文。
 - **知识落库**：将处理后的文章直接追加到指定思源文档 ID。
 - **可扩展架构**：Crawler、LLM Provider、Review Pipeline 与 SiYuan Writer 保持模块化。
 
@@ -40,17 +40,19 @@ Image Localization
 SiYuan Document
 ```
 
-## v0.1.0 MVP 预览版
+## v0.1.1
 
-本版通过 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 提供安装包，暂不在思源集市发布。采集窗口的完整交互链路仍需继续验证，已知问题记录在 [TODO.md](TODO.md)。
+本版通过 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 提供安装包，暂不在思源集市发布。已知限制和后续改进记录在 [TODO.md](TODO.md)。
 
 - [x] 初始化可构建的 SiYuan 插件工程
 - [x] 使用 Firecrawl 抓取 URL 正文与元数据
-- [x] 配置兼容 OpenAI Chat 或 Anthropic Messages 的模型、API 地址与审阅指令
+- [x] 按供应商配置 Kimi、火山引擎、MiniMax、智谱及常见国际模型，也可填写自定义接口
 - [x] 抓取预览、手动编辑、可选 AI 审阅
+- [x] 自定义审阅视角与自然语言文章格式；AI 补全有原文证据的缺失元数据
+- [x] 可选图片审阅；建议移除的图片可在保存前恢复
 - [x] 图片本地化；失败时保留原链接
 - [x] 写入指定思源文档 ID 或当前打开的文档
-- [x] 阶段状态与错误提示
+- [x] 工作台显示阶段进度，并使用思源消息提示错误
 
 安装和使用步骤见 [.docs/usage.md](.docs/usage.md)。
 
@@ -87,7 +89,7 @@ noosphere-siyuan/
 
 ## 许可证
 
-计划采用 MIT License。
+采用 MIT License。
 
 ## 相关链接
 

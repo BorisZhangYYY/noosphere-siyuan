@@ -4,28 +4,65 @@
 
 - 思源笔记 3.7.0 或更新版本（桌面版、Docker 或桌面浏览器前端）。
 - 可访问 Firecrawl API 的网络和 Firecrawl API Key。
-- 只有使用 AI 审阅时才需要兼容 OpenAI Chat Completions 或 Anthropic Messages 的模型服务、模型名称和 API Key。
+- 使用“原文”时无需 AI。使用 AI 审阅时，在知流选择模型供应商并配置 API Key 与模型；支持常见供应商及自定义接口。
 
 ## 本地安装
 
-从 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 下载 `noosphere-siyuan-v0.1.0.zip`，解压到思源工作空间的 `data/plugins/noosphere-siyuan/`。本版暂不在思源集市提供安装。
+从 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 下载 `noosphere-siyuan-v0.1.1.zip`，解压到思源工作空间的 `data/plugins/noosphere-siyuan/`。本版暂不在思源集市提供安装。
 
-也可在项目目录执行 `npm install` 和 `npm run package`，再将生成的 `package.zip` 解压到同一目录。启用插件后，按 `⌥⇧⌘N` 打开采集窗口；也可在命令面板搜索“知流：采集网页文章”，或点击顶部工具栏靠右的链环图标（悬停提示“知流 · 采集文章”）。如果顶部按钮被隐藏，可在工具栏的显隐菜单中打开。
+也可在项目目录执行 `npm install` 和 `npm run package`，再将生成的 `package.zip` 解压到同一目录。启用插件后，按 `⌥⇧⌘N` 打开知流；也可在命令面板搜索“知流：采集网页文章”，或点击顶部工具栏的地球图标。图标只有一个，可以拖到顶部左侧或右侧；右键菜单也能调整位置。如果顶部按钮被隐藏，可在工具栏的显隐菜单中打开。
 
 开发时可运行 `npm run build`，然后把 `dist/` 内容放入上述插件目录并重新加载思源界面。
 
 ## 采集文章
 
-1. 展开“服务配置”，填写 Firecrawl API Key 并保存。若要 AI 审阅，还需填写模型 API 地址、API Key、模型名称及接口格式；默认地址为 `https://api.openai.com/v1`。Anthropic Messages 接口可设置 API 版本，默认 `2023-06-01`。
-2. 输入文章 URL，填写目标思源文档 ID，或点击“使用当前文档”。目标必须是**文档**，不是普通段落块。
-3. 点击“抓取预览”，检查正文。正文可以直接在预览框中修改。
-4. 可选：点击“AI 审阅”并检查模型返回内容。
-5. 点击“写入文档”。插件把文章标题、来源与正文追加到目标文档末尾，不覆盖原文档内容。默认尝试将 Markdown 图片保存到思源资源目录。
+1. 首次打开会进入配置页。填写 Firecrawl API Key；如需 AI 审阅，再选择供应商并配置模型。然后点击“保存并进入工作台”。
+2. 在工作台顶部输入文章 URL 并抓取。正文可直接编辑；进度显示在下方。
+3. 可选：选择“原文”可直接检查抓取正文并保存，不调用 AI；选择“基于原文”或“小白视角”时可点击“AI 审阅”并检查结果。
+4. 填写目标思源文档 ID，或点击“使用当前文档”，再点击“保存文章”。目标必须是**文档**。
+5. 保存成功后点击“打开文档”跳转查看。插件把文章标题、来源与正文追加到目标文档末尾，不覆盖原文档内容。文章中的 Markdown 图片会自动尝试保存到思源资源目录，无须另选开关。
 
 每次成功写入后，若要再次写入，需要重新抓取。图片下载失败时，原图片链接会留在正文里，完成信息会给出失败数量。
 
+## 获取 Firecrawl API Key
+
+1. 打开 [Firecrawl API Keys 页面](https://www.firecrawl.dev/app/api-keys)。未登录时会先进入登录或注册页面。
+2. 登录后进入 API Keys，创建一枚供知流使用的 Key，并复制以 `fc-` 开头的值。
+3. 回到知流首次配置页，粘贴到 **Firecrawl API Key**，点击“保存并进入工作台”。
+4. 粘贴公开网页链接，点击“抓取文章”验证配置。API Key 无效、额度不足或网页无法访问时，思源会显示服务返回的错误提示。
+
+Firecrawl 的服务说明与接口文档见[官方文档](https://docs.firecrawl.dev/)。Firecrawl 的套餐与额度可能调整，请以其页面显示为准。API Key 相当于密码，请勿放入公开文档或截图。
+
+
+## 配置 AI 审阅模型
+
+知流直接连接模型供应商，不调用思源内置编辑模型。按供应商分别记住 API Key、模型、接口和识图能力；切换供应商不会覆盖其他供应商的设置。预置 Kimi API、Kimi Code、火山引擎、MiniMax、智谱 AI、OpenAI、Anthropic 和 Google Gemini；“自定义”支持兼容接口。
+
+审阅分三段：知流内部固定的通用去噪、元数据和 JSON 接口约束；用户选择的视角提示词与自然语言文章格式要求；文字审阅结束后、使用内部摘要建立新上下文进行图片审阅。内置“基于原文”和“小白视角”只读，原文模式不调用模型。固定系统约束不在界面展示或编辑。
+
+在“设置”的“审阅视角与文章格式”中点击“新增视角”，会复制当前视角的提示词，并默认填入不显示摘要的要点式文章格式；可编辑名称、视角提示词和文章格式，保存后在工作台选择使用。“视角提示词”决定怎样理解与保留原文；“文章格式要求”可直接用带分隔线与 Markdown 章节的文字版式描述希望生成的结构，无需记忆变量。内置格式保留 Noosphere 的“AI 摘要 / 正文”与“快速理解 / 阅读前准备 / 正文与讲解”章节。内置视角的两项内容可查看，但不能直接修改。旧版已保存的变量模板会转换为可编辑的文字说明。
+
+修改设置或新增视角后，请点击“保存并进入工作台”。若直接返回工作台，知流会提示确认；确认后会放弃本次未保存的修改。
+
+标题、来源、作者、发布时间由知流组装，不用在文章格式里写占位符。抓取不到作者或发布时间时，AI 可提出候选值及逐字引用的原文证据；知流核对证据后填充。已经抓到的值不会被 AI 覆盖。模型另生成一段仅供图片判断的内部摘要；要求文章“不显示摘要”时，这段内容不会加入正文。
+
+配置模型：
+
+1. 选择供应商。Kimi API 与 Kimi Code 使用不同的 Key 和地址；Kimi Code 预填 `kimi-for-coding`，其余模型 ID 以供应商实际提供的为准。
+2. 填写该供应商的 API Key。入口旁可点“获取 API Key”。点击“获取模型”选择服务返回的模型；若服务不支持列表接口，可手动填写模型 ID。
+3. 官方预设已填好常用 API 地址与协议。只有代理网关或特殊接口才展开“接口设置”修改。支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 和 Google Gemini。
+4. “原文”不调用模型；其他审阅视角使用当前选中的供应商。
+
+### 图片审阅
+
+默认关闭。请先在某个供应商下勾选“这个模型支持识图”，再从“图片审阅模型”中选择它。图片模型与文字模型可以属于不同供应商。请根据供应商说明确认具体模型是否支持图片；模型列表只提供名称，无法可靠判断识图能力。
+
+知流先审阅文字，并让模型生成一段不写入文章的内部摘要。文字模型漏掉的原有图片会补回，再让图片模型结合摘要逐张判断。疑似广告、二维码或无关装饰图会显示为“建议移除”，正文预览先隐藏；可在图片建议列表取消勾选，图片会立即恢复。最终保存以当前正文预览为准。判断不明确、下载失败或模型报错时保留图片并通过思源消息提示。每篇最多自动识别前 12 张图片，单张图片限约 6 MB；其余图片原样保留。
+
+OpenAI 的 [Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create) 与 [模型列表](https://developers.openai.com/api/reference/resources/models/methods/list)、Anthropic 的 [Messages API](https://platform.claude.com/docs/en/api/messages/create) 与 [模型列表](https://platform.claude.com/docs/en/api/models/list)、Google 的 [Gemini API](https://ai.google.dev/api) 与 [模型列表](https://ai.google.dev/api/models) 可用于核对端点和模型 ID。
+
 ## 配置与数据
 
-服务配置保存在当前思源工作空间的插件数据中。API Key 使用密码输入框显示，但插件存储不是加密保险箱；只在自己信任的工作空间中保存密钥。文章内容会发送至 Firecrawl；启用 AI 审阅时，正文还会发送至所配置的模型服务。
+点击知流窗口标题栏右侧的“设置”进入服务配置，配置保存在当前思源工作空间的插件数据中。API Key 默认以固定数量的圆点隐藏，可点击输入框内的眼睛图标查看或再次隐藏。插件存储不是加密保险箱；只在自己信任的工作空间中保存密钥。文章内容会发送至 Firecrawl；启用 AI 审阅时，正文还会发送至所配置的模型服务。
 
-首版使用 Firecrawl API 抓取。Crawl4AI 是 Python SDK，不能直接运行在思源前端插件的 JavaScript 环境中；若要使用它，需要另行部署服务，故不作为本版必选依赖。思源内置 Agent 的工具接入可作为后续扩展，目前审阅使用独立模型配置。
+文章抓取使用 Firecrawl API。Crawl4AI 是 Python SDK，不能直接运行在思源前端插件的 JavaScript 环境中；若要使用它，需要另行部署服务，故不作为本版必选依赖。
