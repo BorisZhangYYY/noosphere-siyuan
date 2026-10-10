@@ -12,6 +12,7 @@ export function composeArticle(article: Article, markdown: string): string {
   const body = markdown.trim();
   const firstHeading = body.match(/^(#{1,6} .+)\n+/);
   if (firstHeading) {
+    if (body.slice(firstHeading[0].length).trimStart().startsWith(`> ${metadata.join(" · ")}`)) return `${body}\n`;
     return `${firstHeading[1]}\n\n> ${metadata.join(" · ")}\n\n${body.slice(firstHeading[0].length).trim()}\n`;
   }
   return `## ${singleLine(article.title)}\n\n> ${metadata.join(" · ")}\n\n${body}\n`;

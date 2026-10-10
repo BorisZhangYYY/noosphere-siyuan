@@ -12,7 +12,9 @@ interface FirecrawlResult {
 }
 
 export function parseArticleUrl(raw: string): URL {
-  const url = new URL(raw.trim());
+  let url: URL;
+  try { url = new URL(raw.trim()); }
+  catch { throw new Error("请输入完整的文章链接，例如 https://example.com/article"); }
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("只支持 HTTP 或 HTTPS 文章链接");
   if (url.username || url.password) throw new Error("文章链接不能包含登录凭据");
   return url;
