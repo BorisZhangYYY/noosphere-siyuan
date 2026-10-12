@@ -214,4 +214,55 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("审阅失败");
     expect(stored().markdown).toBe(article.markdown);
   });
+
+  it("cleans plugin settings, drafts and cache on uninstall and starts fresh on reinstall", async () => {
+    const plugin = await launch(); await scrape(); input("targetDocumentId", "doc");
+    vi.stubGlobal("fetch", vi.fn(async (path: string, options: RequestInit) => {
+      expect(path).toBe("/api/file/removeFile");
+      expect(JSON.parse(options.body as string).path).toBe("/data/storage/petal/noosphere-siyuan");
+      fixtures.files.clear(); return { ok: true, json: async () => ({ code: 0 }) };
+    }));
+    localStorage.setItem("another-plugin", "keep");
+    plugin.onunload(); await plugin.uninstall();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(fixtures.files.size).toBe(0);
+    expect(localStorage.getItem(`noosphere:capture-draft:v1:${window.location.origin}`)).toBeNull();
+    expect(localStorage.getItem("another-plugin")).toBe("keep");
+    await launch(); expect(document.querySelector<HTMLElement>('[data-view="setup"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("");
+  });
+
+  it("does not recreate records when a captured article returns after uninstall", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    const plugin = await launch(); input("url", article.url);
+    vi.stubGlobal("fetch", vi.fn((path: string) => path === "/api/file/removeFile"
+      ? Promise.resolve({ ok: true, json: async () => { fixtures.files.clear(); return { code: 0 }; } })
+      : new Promise(resolve => { finish = resolve; })));
+    click("scrape"); await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    plugin.onunload(); await plugin.uninstall();
+    finish({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown: article.markdown } }) } }) });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(fixtures.files.size).toBe(0);
+    expect(localStorage.getItem(`noosphere:capture-draft:v1:${window.location.origin}`)).toBeNull();
+  });
+
+  it("waits for an existing disk write before deleting plugin storage", async () => {
+    const plugin = await launch(); await scrape();
+    const original = plugin.saveData.bind(plugin);
+    let finish: () => void = () => undefined;
+    const events: string[] = [];
+    vi.spyOn(plugin, "saveData").mockImplementationOnce(async (name, data) => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      events.push("write"); return original(name, data);
+    });
+    input("targetDocumentId", "late-write");
+    await vi.waitFor(() => expect(plugin.saveData).toHaveBeenCalled());
+    const remove = vi.fn(async () => { events.push("remove"); fixtures.files.clear(); return { ok: true, json: async () => ({ code: 0 }) }; });
+    vi.stubGlobal("fetch", remove);
+    plugin.onunload(); const cleaned = plugin.uninstall();
+    await Promise.resolve(); expect(remove).not.toHaveBeenCalled();
+    finish(); await cleaned;
+    expect(events).toEqual(["write", "remove"]);
+    expect(fixtures.files.size).toBe(0);
+  });
 });

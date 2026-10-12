@@ -72,4 +72,17 @@ describe("automatic draft storage", () => {
     await restored.load(); expect(restored.current?.imageDecisions[0].remove).toBe(true);
     expect(restored.current?.reviewedMarkdown).toBe(value.reviewedMarkdown);
   });
+
+  it("removes this workspace's recovery cache and stops scheduled writes after uninstall", async () => {
+    const write = vi.fn();
+    const store = new CaptureDraftStore(async () => null, write, vi.fn(), localStorage, "workspace-a");
+    store.update(draft());
+    localStorage.setItem("noosphere:capture-draft:v1:workspace-b", "other workspace");
+    localStorage.setItem("another-plugin", "keep");
+    store.dispose(); store.update(draft("late callback")); await store.flush(); await vi.advanceTimersByTimeAsync(1000);
+    expect(store.current).toBeNull(); expect(write).not.toHaveBeenCalled();
+    expect(localStorage.getItem("noosphere:capture-draft:v1:workspace-a")).toBeNull();
+    expect(localStorage.getItem("noosphere:capture-draft:v1:workspace-b")).toBe("other workspace");
+    expect(localStorage.getItem("another-plugin")).toBe("keep");
+  });
 });

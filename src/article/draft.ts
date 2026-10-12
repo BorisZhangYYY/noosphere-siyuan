@@ -47,6 +47,7 @@ export class CaptureDraftStore {
   current: CaptureDraft | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pending: Promise<void> = Promise.resolve();
+  private disposed = false;
 
   constructor(
     private readonly read: () => Promise<unknown>,
@@ -67,6 +68,7 @@ export class CaptureDraftStore {
 
   /** 立即更新恢复缓存，合并连续输入，避免每个按键都写入思源文件。 */
   update(draft: CaptureDraft): void {
+    if (this.disposed) return;
     const previousTimestamp = this.current?.updatedAt || 0;
     this.current = JSON.parse(JSON.stringify(draft)) as CaptureDraft;
     this.current.updatedAt = Math.max(draft.updatedAt, previousTimestamp + 1);
@@ -79,10 +81,21 @@ export class CaptureDraftStore {
   flush(): Promise<void> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.disposed) return Promise.resolve();
     if (!this.current) return this.pending;
     const snapshot = JSON.parse(JSON.stringify(this.current)) as CaptureDraft;
     // 超时只结束调用方等待，底层写入仍保持串行，防止慢请求后来覆盖新草稿。
-    this.pending = this.pending.catch(() => undefined).then(() => this.write(snapshot));
+    this.pending = this.pending.catch(() => undefined).then(() => { if (!this.disposed) return this.write(snapshot); });
     return storageTimeout(this.pending);
+  }
+
+  /** 真正卸载时立即停用恢复缓存及排队写入，防止关闭回调重新保存草稿。 */
+  dispose(): void {
+    this.disposed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.current = null;
+    this.recovery?.removeItem(`${RECOVERY_KEY}:${this.workspaceId}`);
+    this.recovery?.removeItem(RECOVERY_KEY);
   }
 }

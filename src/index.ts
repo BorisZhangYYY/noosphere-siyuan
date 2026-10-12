@@ -7,6 +7,7 @@ import { localizeMarkdownImages } from "./images/localize";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
 import { presetProfile, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
+import { removePluginStorage } from "./siyuan/cleanup";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
 import { captureContent } from "./ui";
 import { CaptureDraftStore, DRAFT_STORAGE_NAME, type CaptureDraft } from "./article/draft";
@@ -20,6 +21,8 @@ export default class NoospherePlugin extends Plugin {
   private settings: Settings = { ...DEFAULT_SETTINGS };
   private captureDialog: Dialog | null = null;
   private captureBusy = false;
+  private uninstalled = false;
+  private readonly ownedWrites = new Set<Promise<unknown>>();
   private draftStore!: CaptureDraftStore;
   private draggingTopBar = false;
   private readonly onTopBarDragOver = (event: DragEvent): void => {
@@ -62,7 +65,7 @@ export default class NoospherePlugin extends Plugin {
     this.draftStore = new CaptureDraftStore(
       () => this.loadData(DRAFT_STORAGE_NAME),
       async draft => {
-        const result = await this.saveData(DRAFT_STORAGE_NAME, draft) as { code?: number; msg?: string };
+        const result = await this.saveOwnedData(DRAFT_STORAGE_NAME, draft) as { code?: number; msg?: string };
         if (result?.code !== 0) throw new Error(result?.msg || "草稿保存失败");
       },
       error => showMessage(`草稿未能保存到思源，请稍后重试：${String(error)}`, 7000, "error"),
@@ -109,7 +112,7 @@ export default class NoospherePlugin extends Plugin {
     if (this.settings.topBarPosition === position) return;
     this.settings.topBarPosition = position;
     this.registerTopBar();
-    try { await this.saveData(STORAGE_NAME, this.settings); }
+    try { await this.saveOwnedData(STORAGE_NAME, this.settings); }
     catch (error) { showMessage(`知流位置保存失败：${String(error)}`, 5000, "error"); }
   }
 
@@ -119,8 +122,39 @@ export default class NoospherePlugin extends Plugin {
     document.removeEventListener("drop", this.onTopBarDrop);
   }
 
+  /** 将插件文件写入纳入卸载等待，删除后不会被旧请求再次创建。 */
+  private async saveOwnedData(name: string, value: unknown): Promise<unknown> {
+    if (this.uninstalled) throw new Error("知流已卸载");
+    const writing = this.saveData(name, value);
+    this.ownedWrites.add(writing);
+    try { return await writing; } finally { this.ownedWrites.delete(writing); }
+  }
+
+  /** 思源仅在真正卸载时调用此钩子；普通关闭、禁用和升级继续保留草稿。 */
+  async uninstall(): Promise<void> {
+    this.uninstalled = true;
+    let cacheError: unknown;
+    try { this.draftStore?.dispose(); } catch (error) { cacheError = error; }
+    this.captureDialog?.destroy();
+    this.settings = { ...DEFAULT_SETTINGS, modelProfiles: {}, customPerspectives: [] };
+    this.data = {};
+    await Promise.allSettled(Array.from(this.ownedWrites));
+    this.captureBusy = false;
+    this.data = {};
+    this.settings = { ...DEFAULT_SETTINGS, modelProfiles: {}, customPerspectives: [] };
+    try {
+      await removePluginStorage();
+      if (cacheError) throw cacheError;
+    }
+    catch (error) {
+      showMessage(`知流卸载后的数据清理未完成：${error instanceof Error ? error.message : String(error)}`, 10000, "error");
+      throw error;
+    }
+  }
+
   /** Open onboarding for a new workspace, otherwise show the capture workbench. */
   private openCaptureDialog(): void {
+    if (this.uninstalled) return;
     if (this.captureDialog) {
       this.captureDialog.element.querySelector<HTMLInputElement>('[data-field="url"]')?.focus();
       return;
@@ -433,7 +467,8 @@ export default class NoospherePlugin extends Plugin {
     const saveSettings = async (): Promise<Settings> => {
       const next = readSettings();
       for (const perspective of next.customPerspectives) validatePerspective(perspective);
-      const result = await this.saveData(STORAGE_NAME, next) as { code?: number; msg?: string };
+      const result = await this.saveOwnedData(STORAGE_NAME, next) as { code?: number; msg?: string };
+      if (this.uninstalled) throw new Error("知流已卸载");
       if (result?.code !== 0) throw new Error(result?.msg || "配置保存失败");
       this.settings = next;
       setupBaseline = cloneSettings(next);
@@ -449,12 +484,14 @@ export default class NoospherePlugin extends Plugin {
       setStatus(`${label}中…`);
       try {
         const message = await operation();
+        if (this.uninstalled) return;
         setStatus(message, "success");
         if (reviewing) {
           const failed = imageDecisions.filter(item => imageDecisionStatus(item) === "failed").length;
           setReviewProgress(failed ? `已结束 · ${failed} 张识别失败` : "审阅完成", 100, "100%");
         }
       } catch (error) {
+        if (this.uninstalled) return;
         const message = error instanceof Error ? error.message : String(error);
         setStatus(`${label}失败：${message}`);
         if (reviewing) {
@@ -464,6 +501,7 @@ export default class NoospherePlugin extends Plugin {
         }
         showMessage(`${label}失败：${message}`, 7000, "error");
       } finally {
+        if (this.uninstalled) return;
         busy = false;
         reviewing = false;
         this.captureBusy = false;
@@ -835,6 +873,7 @@ export default class NoospherePlugin extends Plugin {
         const settings = await saveSettings();
         if (!settings.firecrawlKey) { showView("setup"); throw new Error("请先配置 Firecrawl API Key"); }
         const nextArticle = await scrapeWithFirecrawl(inputUrl.value, settings.firecrawlKey);
+        if (this.uninstalled) throw new Error("知流已卸载");
         progressPanel.hidden = true;
         article = nextArticle;
         reviewedMarkdown = "";
@@ -851,6 +890,7 @@ export default class NoospherePlugin extends Plugin {
     });
     /** 完整审阅期间持续显示并保留图片处理结果。 */
     const acceptImageProgress = (result: ImageReviewResult): void => {
+      if (this.uninstalled) throw new Error("知流已卸载");
       imageDecisions = result.decisions;
       if (selectedImage) selectedImage = imageDecisions.find(item => item.full === selectedImage?.full);
       markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
@@ -871,6 +911,7 @@ export default class NoospherePlugin extends Plugin {
         if (!settings.modelKey || !settings.modelName) { showView("setup"); throw new Error("请先配置模型 API Key 和模型名称"); }
         let textReceived = false;
         const acceptText = (result: Awaited<ReturnType<typeof reviewArticleDetailed>>): void => {
+          if (this.uninstalled) throw new Error("知流已卸载");
           textReceived = true;
           article = result.article;
           reviewedMarkdown = result.markdown;
@@ -886,6 +927,7 @@ export default class NoospherePlugin extends Plugin {
         };
         // 只读工作台每次从完整抓取原文审阅，避免旧处理稿遗漏图片。
         const result = await reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: acceptText, onImageProgress: acceptImageProgress });
+        if (this.uninstalled) throw new Error("知流已卸载");
         // 兼容无进度回调的适配器，最终结果仍由同一入口保留。
         if (!textReceived) acceptText(result);
         article = result.article;
@@ -906,9 +948,11 @@ export default class NoospherePlugin extends Plugin {
         const settings = await saveSettings();
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
         await validateTargetDocument(settings.targetDocumentId);
+        if (this.uninstalled) throw new Error("知流已卸载");
         let content = markdown.value;
         let note = "";
         const result = await localizeMarkdownImages(content, article.url);
+        if (this.uninstalled) throw new Error("知流已卸载");
         imageDecisions = localizeImagePreviews(imageDecisions, result.assets || {}, article.url);
         content = result.markdown;
         markdown.value = content;
