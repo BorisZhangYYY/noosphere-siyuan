@@ -8,9 +8,40 @@ const article: Article = { url: "https://example.com/post", title: "Article", ma
 const originalResponse = JSON.stringify({ title: "Reviewed article", markdown: "## AI 摘要\n\nSummary\n\n## 正文\n\nBody", summary: "Article about Body", metadata_candidates: { author: null, published_at: null } });
 const noviceResponse = JSON.stringify({ title: "Reviewed article", markdown: "## 阅读前准备\n\nBackground\n\n## 正文与讲解\n\nBody", summary: "Article about Body" });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("model review adapters", () => {
+  it("allows a long Kimi Code review to finish after the previous one-minute timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async (_path: string, options: RequestInit) => {
+      const request = JSON.parse(options.body as string);
+      expect(request.timeout).toBe(300000);
+      expect(request.payload.max_tokens).toBe(32768);
+      await new Promise(resolve => setTimeout(resolve, 61000));
+      return { ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: originalResponse }] }) } }) };
+    }));
+    const source = { ...article, markdown: "正文".repeat(12000) };
+    let finished = false;
+    const review = reviewArticle(source, { ...DEFAULT_SETTINGS, activeProvider: "kimi_code", modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" }).then(result => { finished = true; return result; });
+    await vi.advanceTimersByTimeAsync(60000); expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000); expect(await review).toContain("## 正文");
+  });
+
+  it.each(["anthropic", "openai_chat", "openai_responses", "google"] as const)("rejects an explicitly truncated %s response before accepting its JSON", async modelFormat => {
+    const result = modelFormat === "anthropic" ? { stop_reason: "max_tokens", content: [{ type: "text", text: originalResponse }] }
+      : modelFormat === "openai_chat" ? { choices: [{ finish_reason: "length", message: { content: originalResponse } }] }
+      : modelFormat === "openai_responses" ? { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output_text: originalResponse }
+      : { candidates: [{ finishReason: "MAX_TOKENS", content: { parts: [{ text: originalResponse }] } }] };
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify(result) } }) })));
+    await expect(reviewArticle(article, { ...DEFAULT_SETTINGS, modelFormat, modelName: "test", modelKey: "test", modelBaseUrl: "https://model.example" })).rejects.toThrow("审阅结果被截断");
+    expect(article.markdown).toBe("# Article\nBody");
+  });
+
+  it("explains a model timeout without labelling it as truncated output", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 1, msg: "API timeout", data: null }) })));
+    await expect(reviewArticle(article, { ...DEFAULT_SETTINGS, modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" })).rejects.toThrow("审阅请求超时");
+  });
+
   it("accepts free-form article structure without slot variables or a visible summary", () => {
     const custom = { id: "custom_notes", label: "论证笔记", description: "突出论据", prompt: "逐条检查论据", template: "不要摘要。按 ## 要点 1、## 要点 2 展开，最后写 ## 总结。" };
     const settings = { ...DEFAULT_SETTINGS, reviewPerspective: custom.id, customPerspectives: [custom] };

@@ -14,6 +14,12 @@ import { PROVIDER_ORDER, PROVIDER_PRESETS } from "./review/providers";
 
 const providerOptions = PROVIDER_ORDER.map(id => [id, PROVIDER_PRESETS[id].label] as const);
 
+/** 与网页端一致的来源、审阅和素材分区，图标跟随思源主题。 */
+function railIcon(kind: "source" | "review" | "assets" | "save"): string {
+  const paths = { source: '<path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6"/>', review: '<path d="m4 20 12-12 4 4L8 24M14 3v3M21 5h3M3 10h3M19 19v3"/>', assets: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m3 17 6-5 4 3 4-5 4 7"/>', save: '<path d="M3 7h7l2 2h9v11H3zM3 7V4h7l2 3"/>' };
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[kind]}</svg>`;
+}
+
 function dropdown(name: string, label: string, options: readonly (readonly [string, string])[]): string {
   return `<div class="noosphere__field">${label ? `<span class="noosphere__field-label">${label}</span>` : ""}<div class="noosphere__dropdown" data-dropdown="${name}"><input type="hidden" data-field="${name}"><button class="noosphere__dropdown-trigger" data-select-trigger="${name}" type="button" aria-label="${label || "审阅视角"}" aria-haspopup="listbox" aria-expanded="false"><span data-select-label="${name}">${options[0][1]}</span><svg class="noosphere__chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg></button><div class="noosphere__dropdown-menu" role="listbox" hidden>${options.map(([value, text]) => `<button type="button" role="option" data-select-option="${name}" data-value="${value}">${text}</button>`).join("")}</div></div></div>`;
 }
@@ -51,19 +57,22 @@ export function captureContent(): string {
       <div class="noosphere__setup-footer"><button data-action="settings" class="b3-button noosphere__primary" type="button">保存并进入工作台</button></div>
     </main>
     <main class="noosphere__workbench" data-view="workbench" hidden>
-      <section class="noosphere__capture"><div><span class="noosphere__eyebrow">采集工作台</span><h2>从网页提取内容</h2></div><div class="noosphere__url-row"><input data-field="url" class="b3-text-field" type="url" inputmode="url" aria-label="文章链接" placeholder="粘贴文章链接 https://…"><button data-action="scrape" class="b3-button noosphere__primary" type="button">抓取文章</button></div></section>
-      <div class="noosphere__work-grid">
-        <section class="noosphere__panel noosphere__review-panel"><div class="noosphere__panel-title"><h3>文章正文</h3><span data-role="articleMeta"></span></div>
-          <div class="noosphere__review-actions">${dropdown("workPerspective", "审阅视角", perspectiveOptions)}<button data-action="review" class="b3-button b3-button--outline" type="button">AI 审阅</button></div>
-          <div data-role="empty" class="noosphere__empty"><strong>等待抓取</strong><span>文章正文会出现在这里</span></div>
-          <textarea data-field="markdown" class="b3-text-field noosphere__editor" aria-label="文章正文预览与编辑" placeholder="抓取后可在此编辑正文" hidden></textarea>
-          <section class="noosphere__image-decisions" data-role="imageDecisions" hidden><div class="noosphere__image-decisions-head"><strong>图片审阅建议</strong><span data-role="imageDecisionCount"></span></div><p>AI 根据审阅后的文章判断图片。建议移除的图片已在正文预览中隐藏；可在这里恢复或调整，保存时以当前预览为准。</p><div data-role="imageDecisionList"></div></section>
+      <section class="noosphere__capture" aria-label="文章抓取"><div class="noosphere__url-row"><input data-field="url" class="b3-text-field" type="url" inputmode="url" aria-label="文章链接" placeholder="粘贴文章链接 https://…"><button data-action="scrape" class="b3-button noosphere__primary" type="button">抓取文章</button></div></section>
+      <div class="noosphere__work-content">
+        <section class="noosphere__review-panel" aria-label="正文阅读区">
+          <div class="noosphere__article-toolbar"><span data-role="articleMeta">文章正文</span><div><span data-role="draftStatus" role="status" aria-live="polite">草稿自动保存</span><span class="noosphere__readonly" title="保存到思源后，可在文档中编辑">只读</span></div></div>
+          <div class="noosphere__article-scroll" data-role="articleScroll"><div data-role="empty" class="noosphere__empty"><strong>等待抓取</strong><span>粘贴文章链接，开始阅读</span></div><article data-role="articlePreview" class="b3-typography noosphere__article-preview" aria-label="文章正文" hidden></article></div>
         </section>
-        <aside class="noosphere__side">
-          <section class="noosphere__panel"><div class="noosphere__panel-title"><h3>进度</h3></div><ol class="noosphere__progress"><li data-stage="scrape"><b>1</b><span>抓取文章</span></li><li data-stage="review"><b>2</b><span>检查与审阅</span></li><li data-stage="save"><b>3</b><span>保存到思源</span></li></ol><p class="noosphere__status" data-role="status" data-tone="info" role="status" aria-live="polite"><span data-role="statusText">粘贴链接后开始抓取。</span></p></section>
-          <section class="noosphere__panel"><div class="noosphere__panel-title"><h3>保存位置</h3></div><label>目标文档 ID<input data-field="targetDocumentId" class="b3-text-field" placeholder="选择当前文档或输入 ID"></label><button data-action="current" class="b3-button b3-button--outline noosphere__current" type="button">使用当前文档</button><button data-action="save" class="b3-button noosphere__primary noosphere__save" type="button">保存文章</button><div data-role="saved" class="noosphere__saved" hidden><span>已保存到思源</span><button data-action="openSaved" class="b3-button b3-button--outline" type="button">打开文档 ↗</button></div></section>
+        <aside class="noosphere__inspection" aria-label="文章信息与操作">
+          <div class="noosphere__inspection-scroll">
+            <details class="noosphere__rail-card noosphere__source"><summary>${railIcon("source")}<h3>来源</h3><span data-role="sourceSummary">—</span><svg class="noosphere__chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg></summary><dl><div><dt>平台</dt><dd data-role="sourcePlatform">—</dd></div><div><dt>作者</dt><dd><input data-field="sourceAuthor" class="noosphere__metadata-input" aria-label="作者" placeholder="填写作者" maxlength="160"></dd></div><div><dt>发布时间</dt><dd><input data-field="sourcePublished" class="noosphere__metadata-input" aria-label="发布时间" placeholder="YYYY-MM-DD" maxlength="80"></dd></div><div><dt>类型</dt><dd>文章</dd></div><div class="noosphere__source-time"><dt>抓取时间</dt><dd data-role="sourceCaptured">—</dd></div></dl><p class="noosphere__rail-note">作者与发布时间可手动修改，自动保存到草稿。</p><a data-role="sourceLink" target="_blank" rel="noopener noreferrer" hidden>打开原文 ↗</a></details>
+            <section class="noosphere__rail-card"><div class="noosphere__rail-title">${railIcon("review")}<h3>AI 审阅</h3><span data-role="reviewState">待审阅</span></div><p class="noosphere__rail-note" data-role="reviewInfo">选择视角，整理当前文章。</p><div class="noosphere__review-actions">${dropdown("workPerspective", "审阅视角", perspectiveOptions)}<div class="noosphere__review-progress" data-role="reviewProgress" aria-live="polite" hidden><div><span data-role="reviewProgressLabel"></span><strong data-role="reviewProgressDetail"></strong></div><progress data-role="reviewProgressBar" max="100" aria-label="AI 审阅进度"></progress></div><button data-action="review" class="b3-button b3-button--outline" type="button">AI 审阅</button></div><p class="noosphere__status" data-role="status" role="status" aria-live="polite" hidden><span data-role="statusText"></span></p></section>
+            <section class="noosphere__rail-card noosphere__assets" data-role="imageDecisions"><div class="noosphere__rail-title">${railIcon("assets")}<h3>素材</h3><span data-role="assetCount">0</span></div><p class="noosphere__rail-note" data-role="imageDecisionCount">抓取后展示文章图片。</p><div data-role="imageDecisionList" class="noosphere__asset-grid"></div></section>
+          </div>
+          <section class="noosphere__rail-card noosphere__save-card" aria-label="保存位置"><div class="noosphere__rail-title">${railIcon("save")}<h3>保存位置</h3></div><label>思源文档<input data-field="targetDocumentId" class="b3-text-field" placeholder="选择当前文档或输入 ID"></label><div class="noosphere__save-actions"><button data-action="current" class="b3-button b3-button--outline" type="button">使用当前文档</button><button data-action="save" class="b3-button noosphere__primary" type="button">保存文章</button></div><div data-role="saved" class="noosphere__saved" hidden><span>已保存到思源</span><button data-action="openSaved" class="b3-button b3-button--outline" type="button">打开文档 ↗</button></div></section>
         </aside>
       </div>
     </main>
+    <div class="noosphere__lightbox" data-role="imageLightbox" hidden><section role="dialog" aria-modal="true" aria-label="图片详情"><div class="noosphere__lightbox-heading"><h3 data-role="imageTitle"></h3><button data-action="closeImage" type="button" aria-label="关闭图片详情">×</button></div><img data-role="imageLarge" alt=""><p data-role="imageDescription"></p><a data-role="imageSource" target="_blank" rel="noopener noreferrer">打开图片来源 ↗</a><button data-action="toggleImage" class="b3-button b3-button--outline" type="button">移除图片</button></section></div>
   </div>`;
 }

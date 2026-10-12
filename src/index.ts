@@ -2,19 +2,25 @@
 import { Dialog, Plugin, confirm, getActiveEditor, openTab, showMessage } from "siyuan";
 import { scrapeWithFirecrawl } from "./crawler/firecrawl";
 import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
-import { applyImageDecisions, type ImageDecision } from "./review/images";
+import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, type ImageDecision, type ImageReviewResult } from "./review/images";
 import { localizeMarkdownImages } from "./images/localize";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
 import { presetProfile, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
 import { captureContent } from "./ui";
+import { CaptureDraftStore, DRAFT_STORAGE_NAME, type CaptureDraft } from "./article/draft";
+import { previewUrl, renderArticlePreview, type MarkdownRenderer } from "./article/preview";
+import { composeArticle } from "./article/compose";
 import "./style.css";
 
 const STORAGE_NAME = "settings.json";
 
 export default class NoospherePlugin extends Plugin {
   private settings: Settings = { ...DEFAULT_SETTINGS };
+  private captureDialog: Dialog | null = null;
+  private captureBusy = false;
+  private draftStore!: CaptureDraftStore;
   private draggingTopBar = false;
   private readonly onTopBarDragOver = (event: DragEvent): void => {
     if (this.draggingTopBar && event.clientY < 72) event.preventDefault();
@@ -50,6 +56,20 @@ export default class NoospherePlugin extends Plugin {
       ? saved.customPerspectives.filter(item => item && item.id !== "legacy_guidance" && /^[a-z0-9_-]+$/.test(item.id)).map(migratePerspective)
       : [];
     this.settings = { ...DEFAULT_SETTINGS, ...(saved || {}), ...restoreProviders(saved), reviewPerspective: saved?.reviewPerspective && saved.reviewPerspective !== "raw" && saved.reviewPerspective !== "legacy_guidance" ? saved.reviewPerspective : "original", customPerspectives };
+    let recovery: Storage | undefined;
+    try { recovery = window.localStorage; } catch { /* 浏览器不允许本地缓存时仍保存到思源。 */ }
+    const workspaceId = (window as unknown as { siyuan?: { config?: { system?: { workspaceDir?: string } } } }).siyuan?.config?.system?.workspaceDir || window.location.origin;
+    this.draftStore = new CaptureDraftStore(
+      () => this.loadData(DRAFT_STORAGE_NAME),
+      async draft => {
+        const result = await this.saveData(DRAFT_STORAGE_NAME, draft) as { code?: number; msg?: string };
+        if (result?.code !== 0) throw new Error(result?.msg || "草稿保存失败");
+      },
+      error => showMessage(`草稿未能保存到思源，请稍后重试：${String(error)}`, 7000, "error"),
+      recovery,
+      workspaceId,
+    );
+    await this.draftStore.load();
     document.querySelectorAll('[data-id="noosphere-capture-left"], [data-id="noosphere-capture-right"]').forEach(entry => entry.remove());
     this.registerTopBar();
     document.addEventListener("dragover", this.onTopBarDragOver);
@@ -94,23 +114,42 @@ export default class NoospherePlugin extends Plugin {
   }
 
   onunload(): void {
+    this.captureDialog?.destroy();
     document.removeEventListener("dragover", this.onTopBarDragOver);
     document.removeEventListener("drop", this.onTopBarDrop);
   }
 
   /** Open onboarding for a new workspace, otherwise show the capture workbench. */
   private openCaptureDialog(): void {
-    let article: Article | null = null;
+    if (this.captureDialog) {
+      this.captureDialog.element.querySelector<HTMLInputElement>('[data-field="url"]')?.focus();
+      return;
+    }
+    if (this.captureBusy) { showMessage("文章仍在处理中，完成后可重新打开工作台。", 5000); return; }
+    const draft = this.draftStore.current;
+    let article: Article | null = draft?.article || null;
     let busy = false;
-    let savedDocumentId = "";
-    let reviewedMarkdown = "";
-    let imageDecisions: ImageDecision[] = [];
+    let reviewing = false;
+    let savedDocumentId = draft?.savedDocumentId || "";
+    let reviewedMarkdown = draft?.reviewedMarkdown || "";
+    let imageDecisions: ImageDecision[] = draft?.imageDecisions.map(item => ({ ...item })) || [];
+    if (article) imageDecisions = normalizeImageDecisions(imageDecisions, article.url);
+    let reviewInfo: CaptureDraft["reviewInfo"] = draft?.reviewInfo;
+    let textReviewed = draft?.textReviewed ?? (!!reviewInfo || !!reviewedMarkdown);
+    let selectedImage: ImageDecision | undefined;
+    let persistDraft: () => void = () => undefined;
     const activeDocumentId = getActiveEditor()?.protyle?.block?.rootID;
     const dialog = new Dialog({
       title: "知流",
       width: `${Math.min(1360, window.innerWidth - 32)}px`,
       content: captureContent(),
+      destroyCallback: () => {
+        persistDraft();
+        void this.draftStore.flush().catch(error => showMessage(`草稿保存失败：${String(error)}`, 7000, "error"));
+        this.captureDialog = null;
+      },
     });
+    this.captureDialog = dialog;
     const dialogHeader = dialog.element.querySelector<HTMLElement>(".b3-dialog__header");
     if (!dialogHeader) throw new Error("知流标题栏没有正确加载");
     dialogHeader.classList.add("noosphere-dialog-header");
@@ -139,12 +178,18 @@ export default class NoospherePlugin extends Plugin {
     const meta = root.querySelector<HTMLElement>('[data-role="articleMeta"]')!;
     const empty = root.querySelector<HTMLElement>('[data-role="empty"]')!;
     const saved = root.querySelector<HTMLElement>('[data-role="saved"]')!;
-    const markdown = field<HTMLTextAreaElement>("markdown");
-    const imageDecisionPanel = root.querySelector<HTMLElement>('[data-role="imageDecisions"]')!;
+    // 正文只读；保留内部 Markdown 供审阅和写入，不暴露源码编辑框。
+    const markdown = { value: draft?.markdown || "" };
+    const articlePreview = root.querySelector<HTMLElement>('[data-role="articlePreview"]')!;
+    const draftStatus = root.querySelector<HTMLElement>('[data-role="draftStatus"]')!;
+    const luteFactory = (window as unknown as { Lute?: { New(): MarkdownRenderer } }).Lute;
+    const renderer = luteFactory?.New();
     const imageDecisionList = root.querySelector<HTMLElement>('[data-role="imageDecisionList"]')!;
     const imageDecisionCount = root.querySelector<HTMLElement>('[data-role="imageDecisionCount"]')!;
     const inputUrl = field<HTMLInputElement>("url");
     const target = field<HTMLInputElement>("targetDocumentId");
+    const sourceAuthor = field<HTMLInputElement>("sourceAuthor");
+    const sourcePublished = field<HTMLInputElement>("sourcePublished");
     const setupPerspective = field<HTMLInputElement>("reviewPerspective");
     const workPerspective = field<HTMLInputElement>("workPerspective");
     const modelProvider = field<HTMLInputElement>("modelProvider");
@@ -157,7 +202,9 @@ export default class NoospherePlugin extends Plugin {
       const wrapper = input.closest<HTMLElement>(".noosphere__secret")!;
       wrapper.classList.toggle("has-value", Boolean(input.value));
     };
-    target.value = this.settings.targetDocumentId;
+    target.value = draft?.targetDocumentId ?? this.settings.targetDocumentId;
+    inputUrl.value = draft?.url || "";
+    markdown.value = draft?.markdown || "";
     for (const name of ["firecrawlKey", "modelBaseUrl", "modelKey", "modelName"] as const) {
       field(name).value = this.settings[name];
     }
@@ -170,10 +217,46 @@ export default class NoospherePlugin extends Plugin {
     modelProvider.value = this.settings.activeProvider;
     imageProvider.value = this.settings.imageProvider;
     setupPerspective.value = this.settings.reviewPerspective;
-    workPerspective.value = this.settings.reviewPerspective;
+    workPerspective.value = draft?.perspective || this.settings.reviewPerspective;
     let customPerspectives: ReviewPerspective[] = this.settings.customPerspectives.map(item => ({ ...item }));
     const modelProfiles: Settings["modelProfiles"] = { ...this.settings.modelProfiles };
     let perspectiveTab: "prompt" | "template" = "prompt";
+
+    const role = (name: string): HTMLElement => root.querySelector<HTMLElement>(`[data-role="${name}"]`)!;
+    /** 来源与正文各自排版，正文滚动不会带走右侧保存按钮。 */
+    const renderArticle = (): void => {
+      const hasArticle = !!article;
+      empty.hidden = hasArticle;
+      articlePreview.hidden = !hasArticle;
+      if (article) {
+        let source = article.url;
+        try { source = new URL(article.url).hostname; } catch { /* 草稿保留原来源。 */ }
+        meta.textContent = article.title;
+        meta.title = article.title;
+        role("sourcePlatform").textContent = /(^|\.)zhihu\.com$/i.test(source) ? "知乎" : source;
+        role("sourceSummary").textContent = role("sourcePlatform").textContent;
+        if (document.activeElement !== sourceAuthor) sourceAuthor.value = article.author || "";
+        if (document.activeElement !== sourcePublished) sourcePublished.value = article.publishedAt || "";
+        role("sourceCaptured").textContent = article.capturedAt ? new Date(article.capturedAt).toLocaleString() : "未记录";
+        const link = role("sourceLink") as HTMLAnchorElement;
+        const url = previewUrl(article.url, article.url);
+        link.hidden = !url;
+        if (url) link.href = url;
+        if (renderer) renderArticlePreview(articlePreview, markdown.value, article.url, renderer);
+        else articlePreview.textContent = "思源阅读组件未加载，请重启思源后重试。已抓取的文章仍保存在草稿中。";
+      }
+      role("reviewState").textContent = reviewing ? "审阅中" : textReviewed ? "已审阅" : "待审阅";
+      role("reviewInfo").textContent = reviewInfo ? `${reviewInfo.model} · ${new Date(reviewInfo.completedAt).toLocaleString()}` : textReviewed ? "已恢复审阅稿，可继续检查图片。" : "选择视角，整理当前文章。";
+    };
+    persistDraft = (): void => {
+      this.draftStore.update({ version: 1, updatedAt: Date.now(), url: inputUrl.value, article, markdown: markdown.value,
+        reviewedMarkdown, imageDecisions, targetDocumentId: target.value, perspective: workPerspective.value, savedDocumentId, reviewInfo, textReviewed });
+      draftStatus.textContent = "草稿自动保存";
+    };
+    const markUnsaved = (): void => {
+      savedDocumentId = "";
+      saved.hidden = true;
+    };
 
     const showView = (view: "setup" | "workbench"): void => {
       setup.hidden = view !== "setup";
@@ -185,79 +268,141 @@ export default class NoospherePlugin extends Plugin {
       headerAction.setAttribute("aria-label", headerActionLabel);
       if (view === "workbench") inputUrl.focus();
     };
-    const setStage = (stage: "scrape" | "review" | "save", state: "active" | "done" | "idle"): void => {
-      const element = root.querySelector<HTMLElement>(`[data-stage="${stage}"]`)!;
-      element.dataset.state = state;
-    };
     const setStatus = (message: string, tone: "info" | "success" = "info"): void => {
+      status.hidden = false;
       status.dataset.tone = tone;
       statusText.textContent = message;
+    };
+    const progressPanel = role("reviewProgress");
+    const progressBar = role("reviewProgressBar") as HTMLProgressElement;
+    /** 使用网页端的阶段标签和原生进度条；等待正文响应时显示不确定进度。 */
+    const setReviewProgress = (label: string, value: number | null, detail: string): void => {
+      progressPanel.hidden = false;
+      progressPanel.classList.remove("is-failed");
+      role("reviewProgressLabel").textContent = label;
+      role("reviewProgressDetail").textContent = detail;
+      progressBar.setAttribute("aria-valuetext", `${label}，${detail}`);
+      if (value === null) progressBar.removeAttribute("value");
+      else progressBar.value = value;
     };
     const updateActions = (): void => {
       const activeCustom = customPerspectives.find(item => item.id === setupPerspective.value);
       action("scrape").disabled = busy || !inputUrl.value.trim();
       action("review").disabled = busy || !article || !markdown.value.trim() || workPerspective.value === "raw";
-      action("save").disabled = busy || !article || !markdown.value.trim() || !target.value.trim();
+      action("review").textContent = reviewing ? "审阅中…" : "AI 审阅";
+      action("save").disabled = busy || !article || !markdown.value.trim() || !target.value.trim() || !!savedDocumentId;
+      action("toggleImage").disabled = busy || !!savedDocumentId;
       for (const name of ["current", "settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab"] as const) action(name).disabled = busy;
       root.querySelectorAll<HTMLButtonElement>("[data-select-trigger], [data-select-option], [data-reveal]").forEach(button => { button.disabled = busy; });
-      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy; });
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || (!!savedDocumentId && !!input.closest(".noosphere__asset")); });
+      sourceAuthor.disabled = busy || !article;
+      sourcePublished.disabled = busy || !article;
       field<HTMLTextAreaElement>("perspectiveEditor").disabled = busy;
       for (const name of ["perspectiveLabel", "perspectiveDescription"]) field<HTMLInputElement>(name).disabled = busy || !customPerspectives.some(item => item.id === setupPerspective.value);
       field<HTMLTextAreaElement>("templateEditor").disabled = busy;
       field<HTMLTextAreaElement>("perspectiveEditor").readOnly = !activeCustom;
       field<HTMLTextAreaElement>("templateEditor").readOnly = !activeCustom;
     };
-    const clearArticle = (): void => {
-      article = null;
-      reviewedMarkdown = "";
-      imageDecisions = [];
-      imageDecisionPanel.hidden = true;
-      imageDecisionList.replaceChildren();
-      savedDocumentId = "";
-      saved.hidden = true;
-      markdown.value = "";
-      markdown.hidden = true;
-      empty.hidden = false;
-      meta.textContent = "";
-      for (const stage of ["scrape", "review", "save"] as const) setStage(stage, "idle");
+    const lightbox = role("imageLightbox");
+    const renderSelectedImage = (): void => {
+      lightbox.hidden = !selectedImage;
+      if (!selectedImage || !article) return;
+      role("imageTitle").textContent = selectedImage.alt || "文章图片";
+      role("imageDescription").textContent = selectedImage.error || selectedImage.description;
+      const url = previewUrl(selectedImage.previewUrl || selectedImage.url, article.url, true);
+      const image = role("imageLarge") as HTMLImageElement;
+      image.alt = selectedImage.alt || "文章图片";
+      image.referrerPolicy = "no-referrer";
+      if (url) image.src = url;
+      else image.removeAttribute("src");
+      const link = role("imageSource") as HTMLAnchorElement;
+      const source = previewUrl(selectedImage.url, article.url, true);
+      link.hidden = !source;
+      if (source) link.href = source;
+      action("toggleImage").textContent = selectedImage.remove ? "恢复图片" : "移除图片";
+    };
+    const changeImageChoice = (decision: ImageDecision, remove: boolean): void => {
+      if (busy || savedDocumentId) return;
+      reviewedMarkdown ||= markdown.value;
+      decision.remove = remove;
+      markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
+      markUnsaved();
+      renderArticle();
+      renderImageDecisions();
+      renderSelectedImage();
+      persistDraft();
       updateActions();
     };
     const renderImageDecisions = (): void => {
       imageDecisionList.replaceChildren();
-      imageDecisionPanel.hidden = !imageDecisions.length;
-      if (!imageDecisions.length) return;
+      if (!imageDecisions.length && article) imageDecisions = imageInventory(markdown.value, article.url);
       const removed = imageDecisions.filter(item => item.remove).length;
-      imageDecisionCount.textContent = removed + " 张待移除 · " + imageDecisions.length + " 张已列出";
-      for (const decision of imageDecisions) {
+      const reviewed = imageDecisions.filter(item => imageDecisionStatus(item) === "reviewed").length;
+      const failed = imageDecisions.filter(item => imageDecisionStatus(item) === "failed").length;
+      const pending = imageDecisions.length - reviewed - failed;
+      role("assetCount").textContent = String(imageDecisions.length - removed);
+      imageDecisionCount.textContent = imageDecisions.length ? `已审阅 ${reviewed} · 待审阅 ${pending} · 失败 ${failed}${removed ? ` · 移除 ${removed}` : ""}` : article ? "这篇文章没有图片。" : "抓取后展示文章图片。";
+      for (const [index, decision] of imageDecisions.entries()) {
         const row = document.createElement("div");
-        row.className = "noosphere__image-decision";
-        if (/^https?:\/\//i.test(decision.url)) {
+        row.className = "noosphere__asset";
+        row.classList.toggle("is-removed", decision.remove);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.imageFull = decision.full;
+        button.setAttribute("aria-label", `查看图片 ${index + 1}：${decision.alt || "文章图片"}`);
+        button.title = decision.error || decision.description;
+        const url = article && previewUrl(decision.previewUrl || decision.url, article.url, true);
+        if (url) {
           const preview = document.createElement("img");
-          preview.src = decision.url;
-          preview.alt = decision.alt || "文章图片预览";
+          preview.src = url;
+          preview.alt = decision.alt || `文章图片 ${index + 1}`;
           preview.loading = "lazy";
-          row.append(preview);
+          preview.referrerPolicy = "no-referrer";
+          preview.addEventListener("error", () => {
+            const fallback = document.createElement("span");
+            fallback.className = "noosphere__asset-missing";
+            fallback.textContent = "图片暂时无法加载";
+            preview.replaceWith(fallback);
+          }, { once: true });
+          button.append(preview);
         }
-        const details = document.createElement("div");
-        const title = document.createElement("strong");
-        title.textContent = decision.alt || "文章图片";
-        const description = document.createElement("span");
-        description.textContent = (decision.recommendedRemove ? "建议移除" : "建议保留") + " · " + decision.description;
-        details.append(title, description);
+        const state = document.createElement("span");
+        const status = imageDecisionStatus(decision);
+        state.textContent = decision.remove ? "已移除" : status === "pending" ? "待审阅" : status === "failed" ? "识别失败" : "已审阅";
+        state.className = `noosphere__asset-state is-${status}`;
+        button.append(state);
+        button.addEventListener("click", () => { selectedImage = decision; renderSelectedImage(); action("closeImage").focus(); });
         const choice = document.createElement("label");
+        choice.title = "移除图片";
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = decision.remove;
-        checkbox.addEventListener("change", () => {
-          decision.remove = checkbox.checked;
-          markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
-          renderImageDecisions();
-        });
-        choice.append(checkbox, "移除");
-        row.append(details, choice);
+        checkbox.disabled = busy || !!savedDocumentId;
+        checkbox.setAttribute("aria-label", `移除图片 ${index + 1}`);
+        checkbox.addEventListener("change", () => changeImageChoice(decision, checkbox.checked));
+        choice.append(checkbox);
+        row.append(button, choice);
         imageDecisionList.append(row);
       }
     };
+    const closeImage = (): void => {
+      const full = selectedImage?.full;
+      selectedImage = undefined;
+      renderSelectedImage();
+      Array.from(imageDecisionList.querySelectorAll<HTMLButtonElement>("button")).find(button => button.dataset.imageFull === full)?.focus();
+    };
+    action("closeImage").addEventListener("click", closeImage);
+    action("toggleImage").addEventListener("click", () => { if (selectedImage) changeImageChoice(selectedImage, !selectedImage.remove); });
+    lightbox.addEventListener("click", event => { if (event.target === lightbox) closeImage(); });
+    lightbox.addEventListener("keydown", event => {
+      if (event.key === "Escape") { event.stopPropagation(); closeImage(); }
+      if (event.key === "Tab") {
+        const buttons = Array.from(lightbox.querySelectorAll<HTMLElement>('button:not(:disabled), a[href]:not([hidden])'));
+        const first = buttons[0], last = buttons.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    });
     const currentProfile = (): ModelProfile => ({
       modelBaseUrl: field("modelBaseUrl").value.trim(),
       modelKey: field("modelKey").value.trim(),
@@ -294,25 +439,39 @@ export default class NoospherePlugin extends Plugin {
       setupBaseline = cloneSettings(next);
       return next;
     };
-    const run = async (label: string, stage: "scrape" | "review" | "save", operation: () => Promise<string>): Promise<void> => {
+    const run = async (label: string, operation: () => Promise<string>): Promise<void> => {
       busy = true;
-      setStage(stage, "active");
+      reviewing = label === "AI 审阅";
+      this.captureBusy = true;
+      if (reviewing) role("reviewState").textContent = "审阅中";
+      if (reviewing) setReviewProgress("正文审阅", null, "等待模型返回");
       updateActions();
       setStatus(`${label}中…`);
       try {
         const message = await operation();
-        setStage(stage, "done");
-        if (stage === "scrape") setStage("review", "active");
-        if (stage === "review") setStage("save", "active");
-        if (stage === "save") setStage("review", "done");
         setStatus(message, "success");
+        if (reviewing) {
+          const failed = imageDecisions.filter(item => imageDecisionStatus(item) === "failed").length;
+          setReviewProgress(failed ? `已结束 · ${failed} 张识别失败` : "审阅完成", 100, "100%");
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        setStatus(`${label}未完成，请查看思源提示。`);
+        setStatus(`${label}失败：${message}`);
+        if (reviewing) {
+          const value = progressBar.hasAttribute("value") ? progressBar.value : 0;
+          setReviewProgress("审阅失败", value, "请查看错误原因");
+          progressPanel.classList.add("is-failed");
+        }
         showMessage(`${label}失败：${message}`, 7000, "error");
       } finally {
         busy = false;
+        reviewing = false;
+        this.captureBusy = false;
+        persistDraft();
+        renderArticle();
         updateActions();
+        try { await this.draftStore.flush(); draftStatus.textContent = "草稿已保存"; }
+        catch (error) { draftStatus.textContent = "草稿保存失败"; showMessage(`草稿保存失败：${String(error)}`, 7000, "error"); }
       }
     };
 
@@ -572,13 +731,22 @@ export default class NoospherePlugin extends Plugin {
     workPerspective.addEventListener("change", () => {
       setDropdown("reviewPerspective", workPerspective.value);
       if (workPerspective.value === "raw" && article) {
+        progressPanel.hidden = true;
         markdown.value = article.markdown;
+        reviewedMarkdown = "";
+        imageDecisions = [];
+        reviewInfo = undefined;
+        textReviewed = false;
+        renderImageDecisions();
+        markUnsaved();
+        renderArticle();
         setStatus("已切换到抓取原文，可以直接检查并保存。");
       }
+      persistDraft();
       updateActions();
     });
     renderPerspectiveOptions();
-    for (const [name, value] of [["modelFormat", this.settings.modelFormat], ["modelProvider", this.settings.activeProvider], ["reviewPerspective", this.settings.reviewPerspective], ["workPerspective", this.settings.reviewPerspective]]) setDropdown(name, value);
+    for (const [name, value] of [["modelFormat", this.settings.modelFormat], ["modelProvider", this.settings.activeProvider], ["reviewPerspective", workPerspective.value], ["workPerspective", workPerspective.value]]) setDropdown(name, value, false);
     refreshPerspectiveEditor();
     renderProviderView();
     action("listModels").addEventListener("click", () => {
@@ -610,17 +778,21 @@ export default class NoospherePlugin extends Plugin {
         }
       })();
     });
-    inputUrl.addEventListener("input", () => { clearArticle(); setStatus("链接已更改，可以重新抓取。"); });
-    markdown.addEventListener("input", () => {
-      if (imageDecisions.length) {
-        imageDecisions = [];
-        reviewedMarkdown = "";
-        imageDecisionPanel.hidden = true;
-        imageDecisionList.replaceChildren();
-      }
+    inputUrl.addEventListener("input", () => { persistDraft(); updateActions(); setStatus(article ? "新文章抓取成功后将替换当前正文。" : "链接已更改，可以抓取文章。"); });
+    /** 来源字段沿用网页端的行内输入，思源草稿即时保留并同步到正文来源行。 */
+    const updateSourceMetadata = (): void => {
+      if (!article || busy) return;
+      article = { ...article, author: sourceAuthor.value.trim(), publishedAt: sourcePublished.value.trim() };
+      markdown.value = composeArticle(article, markdown.value);
+      if (reviewedMarkdown) reviewedMarkdown = composeArticle(article, reviewedMarkdown);
+      markUnsaved();
+      persistDraft();
+      renderArticle();
       updateActions();
-    });
-    target.addEventListener("input", updateActions);
+    };
+    sourceAuthor.addEventListener("input", updateSourceMetadata);
+    sourcePublished.addEventListener("input", updateSourceMetadata);
+    target.addEventListener("input", () => { markUnsaved(); persistDraft(); updateActions(); });
     action("toggleSettings").addEventListener("click", () => {
       if (setup.hidden) {
         setupBaseline = cloneSettings(readSettings());
@@ -655,31 +827,74 @@ export default class NoospherePlugin extends Plugin {
     action("current").addEventListener("click", () => {
       if (activeDocumentId) { target.value = activeDocumentId; setStatus("已选择当前文档。", "success"); }
       else showMessage("没有找到当前打开的文档，请填写文档 ID。", 7000, "error");
+      if (activeDocumentId) { markUnsaved(); persistDraft(); }
       updateActions();
     });
     action("scrape").addEventListener("click", () => {
-      clearArticle();
-      void run("抓取", "scrape", async () => {
+      void run("抓取", async () => {
         const settings = await saveSettings();
         if (!settings.firecrawlKey) { showView("setup"); throw new Error("请先配置 Firecrawl API Key"); }
-        article = await scrapeWithFirecrawl(inputUrl.value, settings.firecrawlKey);
+        const nextArticle = await scrapeWithFirecrawl(inputUrl.value, settings.firecrawlKey);
+        progressPanel.hidden = true;
+        article = nextArticle;
+        reviewedMarkdown = "";
+        imageDecisions = [];
+        reviewInfo = undefined;
+        textReviewed = false;
+        markUnsaved();
         markdown.value = article.markdown;
-        markdown.hidden = false;
-        empty.hidden = true;
-        meta.textContent = `${article.title} · ${new URL(article.url).hostname}`;
+        renderImageDecisions();
+        persistDraft();
+        renderArticle();
         return `已抓取「${article.title}」，可检查正文并保存。`;
       });
     });
+    /** 完整审阅期间持续显示并保留图片处理结果。 */
+    const acceptImageProgress = (result: ImageReviewResult): void => {
+      imageDecisions = result.decisions;
+      if (selectedImage) selectedImage = imageDecisions.find(item => item.full === selectedImage?.full);
+      markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
+      persistDraft();
+      renderArticle();
+      renderImageDecisions();
+      renderSelectedImage();
+      const total = imageDecisions.length;
+      const completed = imageDecisions.filter(item => imageDecisionStatus(item) !== "pending").length;
+      const percent = total ? Math.round(40 + 55 * completed / total) : 95;
+      setReviewProgress(`图片审阅 ${completed}/${total}`, percent, `${percent}%`);
+      setStatus(`正文已保留；图片已审阅 ${result.reviewed}/${imageDecisions.length}${result.warnings.length ? `，${result.warnings.length} 项失败` : ""}。`);
+    };
     action("review").addEventListener("click", () => {
-      void run("AI 审阅", "review", async () => {
+      void run("AI 审阅", async () => {
         const settings = await saveSettings();
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
         if (!settings.modelKey || !settings.modelName) { showView("setup"); throw new Error("请先配置模型 API Key 和模型名称"); }
-        const result = await reviewArticleDetailed(article, settings, markdown.value);
+        let textReceived = false;
+        const acceptText = (result: Awaited<ReturnType<typeof reviewArticleDetailed>>): void => {
+          textReceived = true;
+          article = result.article;
+          reviewedMarkdown = result.markdown;
+          markdown.value = result.markdown;
+          imageDecisions = [];
+          reviewInfo = { summary: result.summary || "", model: settings.modelName, perspective: settings.reviewPerspective, completedAt: new Date().toISOString() };
+          textReviewed = true;
+          markUnsaved();
+          renderArticle();
+          renderImageDecisions();
+          persistDraft();
+          setReviewProgress(settings.imageReview ? "图片审阅" : "正文已完成", settings.imageReview ? 40 : 95, settings.imageReview ? "40%" : "95%");
+        };
+        // 只读工作台每次从完整抓取原文审阅，避免旧处理稿遗漏图片。
+        const result = await reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: acceptText, onImageProgress: acceptImageProgress });
+        // 兼容无进度回调的适配器，最终结果仍由同一入口保留。
+        if (!textReceived) acceptText(result);
         article = result.article;
         reviewedMarkdown = result.markdown;
         imageDecisions = result.imageDecisions;
         markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
+        markUnsaved();
+        persistDraft();
+        renderArticle();
         renderImageDecisions();
         if (result.imageWarnings.length) showMessage(`图片识别有 ${result.imageWarnings.length} 项未完成，相关图片已保留。${result.imageWarnings[0]}`, 7000, "error");
         const enrichment = result.metadataAccepted.length ? "，补全了有原文证据的元数据" : "";
@@ -687,15 +902,19 @@ export default class NoospherePlugin extends Plugin {
       });
     });
     action("save").addEventListener("click", () => {
-      void run("保存", "save", async () => {
+      void run("保存", async () => {
         const settings = await saveSettings();
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
         await validateTargetDocument(settings.targetDocumentId);
         let content = markdown.value;
         let note = "";
         const result = await localizeMarkdownImages(content, article.url);
+        imageDecisions = localizeImagePreviews(imageDecisions, result.assets || {}, article.url);
         content = result.markdown;
         markdown.value = content;
+        // 本地化完成即保留；后续写入失败也不会丢失正文或重复下载图片。
+        persistDraft();
+        renderArticle();
         note = `，已保存 ${result.localized} 张图片`;
         if (result.warnings.length) {
           note += `，${result.warnings.length} 张保留原链接`;
@@ -705,7 +924,7 @@ export default class NoospherePlugin extends Plugin {
         savedDocumentId = settings.targetDocumentId;
         saved.querySelector("span")!.textContent = `已保存 · ${savedDocumentId}`;
         saved.hidden = false;
-        article = null;
+        persistDraft();
         return `已保存到思源${note}。点击“打开文档”查看。`;
       });
     });
@@ -715,6 +934,15 @@ export default class NoospherePlugin extends Plugin {
       dialog.destroy();
     });
     setupBaseline = cloneSettings(readSettings());
+    renderArticle();
+    renderImageDecisions();
+    if (article) {
+      if (savedDocumentId) {
+        saved.querySelector("span")!.textContent = `已保存 · ${savedDocumentId}`;
+        saved.hidden = false;
+      }
+      draftStatus.textContent = "草稿已恢复";
+    }
     showView(this.settings.firecrawlKey ? "workbench" : "setup");
     updateActions();
   }

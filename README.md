@@ -14,7 +14,7 @@ Noosphere for SiYuan 面向思源笔记用户，将网页内容抓取、正文�
 
 - **独立运行**：安装 SiYuan 插件即可使用，不依赖 Noosphere Server。
 - **内容摄取**：从 URL 抓取正文、元数据与图片，并整理为适合知识库保存的内容。
-- **AI Review**：按供应商配置模型；支持自定义视角、文章格式和可选的图片审阅，也可跳过 AI 直接编辑正文。
+- **AI Review**：按供应商配置模型；支持自定义视角、文章格式和可选的图片审阅，也可跳过 AI 直接保存原文。
 - **知识落库**：将处理后的文章直接追加到指定思源文档 ID。
 - **可扩展架构**：Crawler、LLM Provider、Review Pipeline 与 SiYuan Writer 保持模块化。
 
@@ -40,19 +40,20 @@ Image Localization
 SiYuan Document
 ```
 
-## v0.1.1
+## v0.1.2
 
 本版通过 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases) 提供安装包，暂不在思源集市发布。已知限制和后续改进记录在 [TODO.md](TODO.md)。
 
 - [x] 初始化可构建的 SiYuan 插件工程
 - [x] 使用 Firecrawl 抓取 URL 正文与元数据
 - [x] 按供应商配置 Kimi、火山引擎、MiniMax、智谱及常见国际模型，也可填写自定义接口
-- [x] 抓取预览、手动编辑、可选 AI 审阅
+- [x] 草稿自动保留、只读文章预览、可选 AI 审阅
 - [x] 自定义审阅视角与自然语言文章格式；AI 补全有原文证据的缺失元数据
 - [x] 可选图片审阅；建议移除的图片可在保存前恢复
+- [x] 来源信息可手动编辑；图片缩略图与大图正确读取思源本地资源
 - [x] 图片本地化；失败时保留原链接
 - [x] 写入指定思源文档 ID 或当前打开的文档
-- [x] 工作台显示阶段进度，并使用思源消息提示错误
+- [x] 正文与信息栏独立滚动，保存位置固定显示；AI 审阅展示实时进度
 
 安装和使用步骤见 [.docs/usage.md](.docs/usage.md)。
 
