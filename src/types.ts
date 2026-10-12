@@ -37,6 +37,7 @@ export interface Article {
   markdown: string;
   author?: string;
   publishedAt?: string;
+  capturedAt?: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

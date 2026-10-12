@@ -74,4 +74,23 @@ describe("article pipeline", () => {
     const result = await localizeMarkdownImages("![photo](/a.png)", "https://example.com/post");
     expect(result).toMatchObject({ markdown: "![photo](assets/local.png)", localized: 1, warnings: [] });
   });
+
+  it("localizes the whole article without a per-article image count cap", async () => {
+    let uploads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => path === "/api/asset/upload"
+      ? { ok: true, json: async () => ({ code: 0, data: { succFiles: [{ path: `assets/${uploads++}.png` }] } }) }
+      : { ok: true, json: async () => ({ code: 0, data: { status: 200, contentType: "image/png", body: "aGVsbG8=" } }) }));
+    const source = Array.from({ length: 37 }, (_, i) => `![${i}](https://example.com/${i}.png)`).join("\n");
+    const result = await localizeMarkdownImages(source, "https://example.com/post");
+    expect(result.localized).toBe(37); expect(uploads).toBe(37);
+    expect(result.markdown).toContain("![36](assets/36.png)");
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("does not redownload local assets with or without a leading slash", async () => {
+    const fetchFixture = vi.fn(); vi.stubGlobal("fetch", fetchFixture);
+    const markdown = "![一](assets/a.png)\n![二](/assets/b.png)";
+    expect((await localizeMarkdownImages(markdown, "https://example.com/post")).markdown).toBe(markdown);
+    expect(fetchFixture).not.toHaveBeenCalled();
+  });
 });

@@ -1,15 +1,15 @@
 /** Fetch article images through SiYuan and replace remote Markdown URLs with local assets. */
 import { proxyRequest } from "../siyuan/api";
+import { localAssetPath } from "./reference";
 
 export interface LocalizationResult {
   markdown: string;
   localized: number;
   warnings: string[];
+  assets?: Record<string, string>;
 }
 
 const IMAGE_PATTERN = /!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g;
-const MAX_IMAGES = 30;
-const MAX_BASE64_LENGTH = 14_000_000;
 
 function fileExtension(contentType: string): string {
   const type = contentType.split(";")[0].trim().toLowerCase();
@@ -24,7 +24,6 @@ async function uploadImage(url: string, index: number): Promise<string> {
   const response = await proxyRequest(url, "GET", {}, undefined, "base64");
   const extension = fileExtension(response.contentType);
   if (!extension) throw new Error(`不是支持的图片格式：${response.contentType}`);
-  if (response.body.length > MAX_BASE64_LENGTH) throw new Error("图片超过 10 MB 限制");
   const binary = atob(response.body);
   const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
   const file = new File([bytes], `noosphere-${Date.now()}-${index}.${extension}`, { type: response.contentType });
@@ -48,9 +47,10 @@ export async function localizeMarkdownImages(markdown: string, articleUrl: strin
   const warnings: string[] = [];
   const replacements = new Map<string, string>();
   let localized = 0;
-  for (const match of matches.slice(0, MAX_IMAGES)) {
+  // 按整篇处理图片，不因图片较多而截断保存；已有本地资源不重复下载。
+  for (const match of matches) {
     const original = match[2].replace(/^<|>$/g, "");
-    if (replacements.has(original) || original.startsWith("assets/") || original.startsWith("data:")) continue;
+    if (replacements.has(original) || localAssetPath(original) || original.startsWith("data:")) continue;
     try {
       const url = new URL(original, articleUrl);
       if (!["http:", "https:"].includes(url.protocol)) throw new Error("非 HTTP 图片地址");
@@ -60,10 +60,9 @@ export async function localizeMarkdownImages(markdown: string, articleUrl: strin
       warnings.push(`图片 ${original}：${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  if (matches.length > MAX_IMAGES) warnings.push(`仅处理前 ${MAX_IMAGES} 张图片，其余保留原链接`);
   const output = markdown.replace(IMAGE_PATTERN, (full, alt: string, raw: string) => {
     const original = raw.replace(/^<|>$/g, "");
     return replacements.has(original) ? `![${alt}](${replacements.get(original)})` : full;
   });
-  return { markdown: output, localized, warnings };
+  return { markdown: output, localized, warnings, assets: Object.fromEntries(replacements) };
 }

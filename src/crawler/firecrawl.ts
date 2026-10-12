@@ -40,5 +40,6 @@ export async function scrapeWithFirecrawl(rawUrl: string, apiKey: string): Promi
     markdown: result.data.markdown.trim(),
     author: result.data.metadata?.author,
     publishedAt: result.data.metadata?.publishedTime,
+    capturedAt: new Date().toISOString(),
   };
 }

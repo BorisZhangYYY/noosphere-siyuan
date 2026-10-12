@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewArticleDetailed } from "../src/review/provider";
-import { applyImageDecisions } from "../src/review/images";
+import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, reviewImages } from "../src/review/images";
 import { DEFAULT_SETTINGS, type Article, type Settings } from "../src/types";
 
 const article: Article = { url: "https://example.com/post", title: "Example", markdown: "# Example\n\nEvidence\n\n![screenshot](https://example.com/pic.png)\n\nEnd" };
@@ -27,6 +27,90 @@ function mockReview(classification: "PROMOTION" | "RELEVANT", format: Settings["
 }
 
 describe("image review", () => {
+  it("repairs legacy local asset URLs and preserves image decisions", () => {
+    const full = "![本地图](assets/captured.jpg)";
+    const inventory = imageInventory(full, article.url);
+    expect(inventory[0].url).toBe("/assets/captured.jpg");
+    const repaired = normalizeImageDecisions([{ ...inventory[0], url: "https://example.com/assets/captured.jpg", remove: true, description: "保留原判断" }], article.url);
+    expect(repaired[0]).toMatchObject({ url: "/assets/captured.jpg", remove: true, description: "保留原判断" });
+  });
+
+  it("keeps the original image source while displaying a localized thumbnail", () => {
+    const decisions = imageInventory(article.markdown, article.url);
+    const localized = localizeImagePreviews(decisions, { "https://example.com/pic.png": "assets/local.png" }, article.url);
+    expect(localized[0]).toMatchObject({ url: "https://example.com/pic.png", previewUrl: "/assets/local.png" });
+  });
+
+  it("reads a local SiYuan resource directly for vision review", async () => {
+    const proxyFixture = mockReview("RELEVANT");
+    const fetchFixture = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
+      if (path === "/assets/local.png") return new Response("hello", { headers: { "Content-Type": "image/png" } });
+      return fetchFixture(path, options);
+    }));
+    const result = await reviewImages({ ...article, markdown: "![本地图](assets/local.png)" }, "摘要", settings);
+    expect(result.reviewed).toBe(1);
+    expect(proxyFixture).toHaveLength(1);
+    expect(proxyFixture[0].method).toBe("POST");
+    expect(result.decisions[0].url).toBe("/assets/local.png");
+  });
+
+  it("reviews images beyond the former 12-image cap and reports completion", async () => {
+    const requests = mockReview("RELEVANT");
+    const longArticle = { ...article, markdown: Array.from({ length: 17 }, (_, i) => `![图${i}](https://example.com/${i}.png)`).join("\n\n") };
+    const progress = vi.fn();
+    const result = await reviewImages(longArticle, "长文摘要", settings, progress);
+    expect(result.reviewed).toBe(17);
+    expect(result.decisions.at(-1)?.status).toBe("reviewed");
+    expect(requests.filter(request => request.method === "POST")).toHaveLength(17);
+    expect(progress.mock.calls[0][0].reviewed).toBe(0);
+    expect(progress.mock.calls.at(-1)![0].reviewed).toBe(17);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("processes the entire inventory again in each full review", async () => {
+    const requests = mockReview("RELEVANT");
+    const source = { ...article, markdown: ["a", "b", "c"].map(name => `![${name}](https://example.com/${name}.png)`).join("\n") };
+    await reviewImages(source, "摘要", settings);
+    const result = await reviewImages(source, "摘要", settings);
+    expect(requests.filter(request => request.method === "POST")).toHaveLength(6);
+    expect(result.reviewed).toBe(3);
+  });
+
+  it("classifies a repeated URL once and keeps a decision for each reference", async () => {
+    const requests = mockReview("RELEVANT");
+    const source = { ...article, markdown: "![第一处](https://example.com/same.png)\n![第二处](https://example.com/same.png)" };
+    const result = await reviewImages(source, "摘要", settings);
+    expect(requests.filter(request => request.method === "POST")).toHaveLength(1);
+    expect(result.decisions).toHaveLength(2);
+    expect(result.reviewed).toBe(2);
+  });
+
+  it("stores the text result before vision requests start", async () => {
+    mockReview("RELEVANT");
+    const events: string[] = [];
+    const result = await reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: text => { events.push("text"); expect(text.markdown).toContain("Evidence"); }, onImageProgress: () => events.push("image") });
+    expect(events[0]).toBe("text");
+    expect(events.filter(event => event === "image")).toHaveLength(2);
+    expect(result.imagesReviewed).toBe(1);
+  });
+
+  it("limits simultaneous vision requests to two while processing every image", async () => {
+    mockReview("RELEVANT");
+    const fetchFixture = fetch;
+    let active = 0, maximum = 0;
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
+      const request = JSON.parse(options!.body as string);
+      if (request.method !== "POST") return fetchFixture(path, options);
+      active++; maximum = Math.max(maximum, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      try { return await fetchFixture(path, options); } finally { active--; }
+    }));
+    const source = { ...article, markdown: Array.from({ length: 7 }, (_, i) => `![${i}](https://example.com/${i}.png)`).join("\n") };
+    const result = await reviewImages(source, "摘要", settings);
+    expect(result.reviewed).toBe(7); expect(maximum).toBe(2);
+  });
+
   it("reviews images after the text model and keeps removals reversible", async () => {
     const requests = mockReview("PROMOTION");
     const result = await reviewArticleDetailed(article, settings);
