@@ -12,6 +12,29 @@ describe("automatic draft storage", () => {
   beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); });
   afterEach(() => vi.useRealTimers());
 
+  it("coalesces long-review progress on disk while keeping every result in recovery", async () => {
+    const write = vi.fn(), store = new CaptureDraftStore(async () => null, write, vi.fn(), localStorage);
+    for (let i = 0; i < 10; i++) {
+      store.update(draft(`进度 ${i}`), 5000);
+      const reopened = new CaptureDraftStore(async () => null, async () => undefined, vi.fn(), localStorage);
+      await reopened.load(); expect(reopened.current?.markdown).toBe(`进度 ${i}`);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(write).toHaveBeenCalledTimes(2);
+    store.update(draft("结束前进度"), 5000); await store.flush();
+    expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ markdown: "结束前进度" }));
+    store.update(draft("结束前进度")); await store.flush(); await store.flush();
+    expect(write).toHaveBeenCalledTimes(3);
+  });
+
+  it("deduplicates queued flushes without preventing retries after a failed write", async () => {
+    const write = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const store = new CaptureDraftStore(async () => null, write, vi.fn()); store.update(draft());
+    const first = store.flush(), second = store.flush();
+    await expect(first).rejects.toThrow("offline"); await second;
+    await store.flush(); expect(write).toHaveBeenCalledTimes(2);
+  });
+
   it("recovers typing before the delayed disk write or window close", async () => {
     const store = new CaptureDraftStore(async () => null, async () => undefined, vi.fn(), localStorage);
     store.update(draft("手动修改"));

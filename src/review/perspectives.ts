@@ -1,5 +1,6 @@
 /** Review viewpoints and free-form article-format instructions. */
 import { composeArticle } from "../article/compose";
+import { outputLanguagePrompt } from "./language";
 import type { Article, ReviewPerspective, Settings } from "../types";
 
 const COMMON_PROMPT = `你正在把抓取到的文章整理为个人知识库中的可信审阅稿。
@@ -118,7 +119,7 @@ export function getPerspective(settings: Settings): ReviewPerspective {
 
 export function buildReviewPrompt(settings: Settings): string {
   const perspective = getPerspective(settings);
-  return `# 固定通用约束\n\n${COMMON_PROMPT}\n\n# 审阅视角：${perspective.label}\n\n${perspective.prompt}\n\n# 文章格式要求\n\n${perspective.template}\n\n# JSON 接口格式\n\n只返回一个 JSON 对象，不加代码围栏或额外说明。正文可以自由使用 Markdown，不需要变量或固定区块。summary 是供后续图片审阅使用的内部摘要：即使文章格式要求“不显示摘要”，也要填写 summary，但不要因此在 markdown 中添加摘要段落。\nmetadata_candidates 仅在抓取到的作者或发布时间缺失、且原文有明确证据时填写。evidence 必须逐字摘自抓取原文，不得猜测。published_at 使用 YYYY-MM-DD；没有明确的年月日就保持 null。已抓取到的字段保持 null。\n{\n  "title": "审阅后的文章标题",\n  "markdown": "正文 Markdown；不要在这里重复标题或来源元数据",\n  "summary": "概括文章主题、结论和图片判断所需的上下文；不会写进文章",\n  "metadata_candidates": {\n    "author": null,\n    "published_at": null\n  }\n}\n有证据时，把对应的 null 改成 {"value":"字段值","evidence":"原文中的原样片段"}。`;
+  return `# 固定通用约束\n\n${COMMON_PROMPT}\n\n# 审阅视角：${perspective.label}\n\n${perspective.prompt}\n\n# 文章格式要求\n\n${perspective.template}\n\n# 输出语言\n\n${outputLanguagePrompt(settings.outputLanguage)}\n\n# JSON 接口格式\n\n只返回一个 JSON 对象，不加代码围栏或额外说明。正文可以自由使用 Markdown，不需要变量或固定区块。summary 是供后续图片审阅使用的内部摘要：即使文章格式要求“不显示摘要”，也要填写 summary，但不要因此在 markdown 中添加摘要段落。\nmetadata_candidates 仅在抓取到的作者或发布时间缺失、且原文有明确证据时填写。evidence 必须逐字摘自抓取原文，不得猜测。published_at 使用 YYYY-MM-DD；没有明确的年月日就保持 null。已抓取到的字段保持 null。\n{\n  "title": "审阅后的文章标题",\n  "markdown": "正文 Markdown；不要在这里重复标题或来源元数据",\n  "summary": "概括文章主题、结论和图片判断所需的上下文；不会写进文章",\n  "metadata_candidates": {\n    "author": null,\n    "published_at": null\n  }\n}\n有证据时，把对应的 null 改成 {"value":"字段值","evidence":"原文中的原样片段"}。`;
 }
 
 export interface ReviewResult { markdown: string; article: Article; summary: string; metadataAccepted: string[] }

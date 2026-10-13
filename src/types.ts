@@ -2,6 +2,7 @@
 export interface Settings {
   topBarPosition: "left" | "right";
   reviewPerspective: string;
+  outputLanguage: import("./review/language").OutputLanguage;
   firecrawlKey: string;
   modelBaseUrl: string;
   modelKey: string;
@@ -43,6 +44,7 @@ export interface Article {
 export const DEFAULT_SETTINGS: Settings = {
   topBarPosition: "right",
   reviewPerspective: "original",
+  outputLanguage: "follow_ui",
   firecrawlKey: "",
   modelBaseUrl: "https://api.openai.com/v1",
   modelKey: "",

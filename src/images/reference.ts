@@ -15,3 +15,19 @@ export function resolveImageReference(raw: string, articleUrl: string): string {
     return ["http:", "https:"].includes(url.protocol) ? url.href : "";
   } catch { return ""; }
 }
+
+/** 抓取器偶尔把文章链接写成图片，含片段的同页链接也不是配图。 */
+export function isArticleImagePlaceholder(raw: string, articleUrl: string): boolean {
+  if (localAssetPath(raw)) return false;
+  try {
+    const image = new URL(raw.trim().replace(/^<|>$/g, ""), articleUrl), article = new URL(articleUrl);
+    image.hash = ""; article.hash = "";
+    return image.href === article.href;
+  } catch { return false; }
+}
+
+/** 清理错误的图片占位，普通文章链接、无扩展名的配图和原文其他内容继续保留。 */
+export function stripArticleImagePlaceholders(markdown: string, articleUrl: string): string {
+  return markdown.replace(/!\[[^\]]*\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g, (full: string, raw: string) =>
+    isArticleImagePlaceholder(raw, articleUrl) ? "" : full);
+}

@@ -1,6 +1,6 @@
 /** Fetch article images through SiYuan and replace remote Markdown URLs with local assets. */
 import { proxyRequest } from "../siyuan/api";
-import { localAssetPath } from "./reference";
+import { localAssetPath, stripArticleImagePlaceholders } from "./reference";
 
 export interface LocalizationResult {
   markdown: string;
@@ -43,6 +43,7 @@ async function uploadImage(url: string, index: number): Promise<string> {
 
 /** Preserve remote links when an individual image cannot be downloaded. */
 export async function localizeMarkdownImages(markdown: string, articleUrl: string): Promise<LocalizationResult> {
+  markdown = stripArticleImagePlaceholders(markdown, articleUrl);
   const matches = [...markdown.matchAll(IMAGE_PATTERN)];
   const warnings: string[] = [];
   const replacements = new Map<string, string>();
