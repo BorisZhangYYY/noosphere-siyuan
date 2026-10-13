@@ -11,19 +11,19 @@ const noviceResponse = JSON.stringify({ title: "Reviewed article", markdown: "##
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("model review adapters", () => {
-  it("allows a long Kimi Code review to finish after the previous one-minute timeout", async () => {
+  it("allows a long Kimi Code review to finish after thirty minutes", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn(async (_path: string, options: RequestInit) => {
       const request = JSON.parse(options.body as string);
-      expect(request.timeout).toBe(300000);
+      expect(request.timeout).toBe(3600000);
       expect(request.payload.max_tokens).toBe(32768);
-      await new Promise(resolve => setTimeout(resolve, 61000));
+      await new Promise(resolve => setTimeout(resolve, 1801000));
       return { ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: originalResponse }] }) } }) };
     }));
     const source = { ...article, markdown: "正文".repeat(12000) };
     let finished = false;
     const review = reviewArticle(source, { ...DEFAULT_SETTINGS, activeProvider: "kimi_code", modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" }).then(result => { finished = true; return result; });
-    await vi.advanceTimersByTimeAsync(60000); expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(1800000); expect(finished).toBe(false);
     await vi.advanceTimersByTimeAsync(1000); expect(await review).toContain("## 正文");
   });
 

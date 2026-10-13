@@ -12,6 +12,29 @@ describe("automatic draft storage", () => {
   beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); });
   afterEach(() => vi.useRealTimers());
 
+  it("coalesces long-review progress on disk while keeping every result in recovery", async () => {
+    const write = vi.fn(), store = new CaptureDraftStore(async () => null, write, vi.fn(), localStorage);
+    for (let i = 0; i < 10; i++) {
+      store.update(draft(`进度 ${i}`), 5000);
+      const reopened = new CaptureDraftStore(async () => null, async () => undefined, vi.fn(), localStorage);
+      await reopened.load(); expect(reopened.current?.markdown).toBe(`进度 ${i}`);
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(write).toHaveBeenCalledTimes(2);
+    store.update(draft("结束前进度"), 5000); await store.flush();
+    expect(write).toHaveBeenLastCalledWith(expect.objectContaining({ markdown: "结束前进度" }));
+    store.update(draft("结束前进度")); await store.flush(); await store.flush();
+    expect(write).toHaveBeenCalledTimes(3);
+  });
+
+  it("deduplicates queued flushes without preventing retries after a failed write", async () => {
+    const write = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined);
+    const store = new CaptureDraftStore(async () => null, write, vi.fn()); store.update(draft());
+    const first = store.flush(), second = store.flush();
+    await expect(first).rejects.toThrow("offline"); await second;
+    await store.flush(); expect(write).toHaveBeenCalledTimes(2);
+  });
+
   it("recovers typing before the delayed disk write or window close", async () => {
     const store = new CaptureDraftStore(async () => null, async () => undefined, vi.fn(), localStorage);
     store.update(draft("手动修改"));
@@ -71,5 +94,18 @@ describe("automatic draft storage", () => {
     const restored = new CaptureDraftStore(async () => value, async () => undefined, vi.fn());
     await restored.load(); expect(restored.current?.imageDecisions[0].remove).toBe(true);
     expect(restored.current?.reviewedMarkdown).toBe(value.reviewedMarkdown);
+  });
+
+  it("removes this workspace's recovery cache and stops scheduled writes after uninstall", async () => {
+    const write = vi.fn();
+    const store = new CaptureDraftStore(async () => null, write, vi.fn(), localStorage, "workspace-a");
+    store.update(draft());
+    localStorage.setItem("noosphere:capture-draft:v1:workspace-b", "other workspace");
+    localStorage.setItem("another-plugin", "keep");
+    store.dispose(); store.update(draft("late callback")); await store.flush(); await vi.advanceTimersByTimeAsync(1000);
+    expect(store.current).toBeNull(); expect(write).not.toHaveBeenCalled();
+    expect(localStorage.getItem("noosphere:capture-draft:v1:workspace-a")).toBeNull();
+    expect(localStorage.getItem("noosphere:capture-draft:v1:workspace-b")).toBe("other workspace");
+    expect(localStorage.getItem("another-plugin")).toBe("keep");
   });
 });

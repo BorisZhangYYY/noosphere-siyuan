@@ -7,6 +7,15 @@ import { composeArticle } from "../src/article/compose";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("article pipeline", () => {
+  it("filters self-page image placeholders when capturing and localizing an old article", async () => {
+    const markdown = "![](https://example.com/post)\n\n正文 [来源](https://example.com/post)";
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown } }) } }) })));
+    expect((await scrapeWithFirecrawl("https://example.com/post", "secret")).markdown).toBe("正文 [来源](https://example.com/post)");
+    vi.mocked(fetch).mockClear();
+    expect(await localizeMarkdownImages(markdown, "https://example.com/post")).toMatchObject({ localized: 0, warnings: [], markdown: "\n\n正文 [来源](https://example.com/post)" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("uses the reviewed title once when the draft begins with a heading", () => {
     const markdown = composeArticle(
       { url: "https://example.com/post", title: "Article - Site", markdown: "# Article\n\nBody" },

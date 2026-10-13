@@ -1,8 +1,9 @@
 /** Conservative image review adapted from Noosphere's image_filter workflow. */
-import { proxyRequest } from "../siyuan/api";
+import { proxyRequest, throwIfCancelled } from "../siyuan/api";
 import type { Article, Settings } from "../types";
 import { modelEndpoint } from "./endpoint";
-import { localAssetPath, resolveImageReference } from "../images/reference";
+import { isArticleImagePlaceholder, localAssetPath, resolveImageReference } from "../images/reference";
+import { conciseRequestError } from "../siyuan/errors";
 
 const IMAGE = /!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g;
 const IMAGE_CONCURRENCY = 2;
@@ -28,9 +29,11 @@ export function imageInventory(markdown: string, articleUrl: string): ImageDecis
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */
 export function normalizeImageDecisions(decisions: ImageDecision[], articleUrl: string): ImageDecision[] {
-  return decisions.map(item => {
+  return decisions.filter(item => !isArticleImagePlaceholder(item.url, articleUrl)).map(item => {
     const ref = refs(item.full, articleUrl)[0];
-    return ref ? { ...item, url: ref.url } : item;
+    const normalized = ref ? { ...item, url: ref.url } : { ...item };
+    if (normalized.error) normalized.error = conciseRequestError(normalized.error);
+    return normalized;
   });
 }
 
@@ -52,7 +55,7 @@ export function imageReviewSettings(settings: Settings): Settings {
 }
 
 function refs(markdown: string, articleUrl: string): ImageRef[] {
-  return [...markdown.matchAll(IMAGE)].map(match => {
+  return [...markdown.matchAll(IMAGE)].filter(match => !isArticleImagePlaceholder(match[2], articleUrl)).map(match => {
     const raw = match[2].replace(/^<|>$/g, "");
     const url = resolveImageReference(raw, articleUrl);
     return { full: match[0], raw, alt: match[1], url };
@@ -68,12 +71,13 @@ function responseText(body: string, format: Settings["modelFormat"]): string {
   return typeof content === "string" ? content : content?.filter((item: any) => item.type === "text").map((item: any) => item.text).join("\n") || "";
 }
 
-async function classify(ref: ImageRef, article: Article, summary: string, settings: Settings): Promise<{ classification: "RELEVANT" | "PROMOTION"; description: string }> {
+async function classify(ref: ImageRef, article: Article, summary: string, settings: Settings, signal?: AbortSignal): Promise<{ classification: "RELEVANT" | "PROMOTION"; description: string }> {
+  throwIfCancelled(signal);
   // 本地资源直接由当前思源读取，不能经外部网站或代理重新下载。
   const local = localAssetPath(ref.raw);
   let downloaded: { body: string; contentType: string };
   if (local) {
-    const response = await fetch(local);
+    const response = await fetch(local, { signal });
     if (!response.ok) throw new Error(`思源图片读取失败：HTTP ${response.status}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
     let binary = "";
@@ -82,8 +86,10 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
   } else {
     const imageUrl = new URL(ref.url);
     if (!["http:", "https:"].includes(imageUrl.protocol)) throw new Error("图片地址不是 HTTP 链接");
-    downloaded = await proxyRequest(imageUrl.href, "GET", {}, undefined, "base64");
+    try { downloaded = await proxyRequest(imageUrl.href, "GET", {}, undefined, "base64", 60000, signal); }
+    catch (error) { throwIfCancelled(signal); throw new Error(`图片下载失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
   }
+  throwIfCancelled(signal);
   const mime = downloaded.contentType.split(";")[0].toLowerCase();
   if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mime)) throw new Error(`模型暂不支持 ${mime || "未知"} 图片格式`);
   const context = `文章标题：${article.title}\n审阅后摘要：${summary}\n图片说明：${ref.alt || "无"}\n请结合审阅后的文章判断图片是否相关。`;
@@ -106,7 +112,10 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
   const headers: Record<string, string> = settings.modelFormat === "anthropic"
     ? { "x-api-key": settings.modelKey.trim(), "anthropic-version": "2023-06-01" }
     : settings.modelFormat === "google" ? { "x-goog-api-key": settings.modelKey.trim() } : { Authorization: `Bearer ${settings.modelKey.trim()}` };
-  const response = await proxyRequest(endpoint, "POST", headers, payload, "text", IMAGE_REVIEW_TIMEOUT_MS);
+  let response: Awaited<ReturnType<typeof proxyRequest>>;
+  try { response = await proxyRequest(endpoint, "POST", headers, payload, "text", IMAGE_REVIEW_TIMEOUT_MS, signal); }
+  catch (error) { throwIfCancelled(signal); throw new Error(`图片模型请求失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
+  throwIfCancelled(signal);
   const text = responseText(response.body, settings.modelFormat).trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
   const parsed = JSON.parse(text) as { classification?: string; description?: string };
   if (parsed.classification !== "RELEVANT" && parsed.classification !== "PROMOTION") throw new Error("模型未给出明确的图片判断");
@@ -114,7 +123,8 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
 }
 
 /** Suggest removals after text review; keep full Markdown until the user decides. */
-export async function reviewImages(article: Article, summary: string, settings: Settings, onProgress?: (result: ImageReviewResult) => void): Promise<ImageReviewResult> {
+export async function reviewImages(article: Article, summary: string, settings: Settings, onProgress?: (result: ImageReviewResult) => void, signal?: AbortSignal): Promise<ImageReviewResult> {
+  throwIfCancelled(signal);
   const images = [...new Map(refs(article.markdown, article.url).map(ref => [ref.full, ref])).values()];
   const decisions = imageInventory(article.markdown, article.url);
   // 同一次审阅覆盖全部图片；相同地址的多个引用共享本次识别结果。
@@ -131,17 +141,20 @@ export async function reviewImages(article: Article, summary: string, settings: 
   onProgress?.(snapshot());
   const worker = async (): Promise<void> => {
     while (next < groups.length) {
+      throwIfCancelled(signal);
       const group = groups[next++];
       try {
-        const result = await classify(group[0].ref, article, summary, settings);
+        const result = await classify(group[0].ref, article, summary, settings, signal);
+        throwIfCancelled(signal);
         for (const { ref, index } of group) {
           const recommendedRemove = result.classification === "PROMOTION";
           decisions[index] = { ...decisions[index], description: result.description || ref.alt || "文章相关图片", recommendedRemove, remove: recommendedRemove, status: "reviewed" };
         }
       } catch (error) {
+        throwIfCancelled(signal);
         const message = error instanceof Error ? error.message : String(error);
         for (const { index } of group) decisions[index] = { ...decisions[index], description: "未能识别，默认保留", status: "failed", error: message };
-        warnings.push(`${group[0].ref.alt || group[0].ref.raw}：${message}`);
+        warnings.push(`图片 ${group[0].index + 1}：${message}`);
       }
       // 处理过程中持续保留结果，完成状态在全部图片处理后统一返回。
       onProgress?.(snapshot());

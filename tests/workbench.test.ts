@@ -2,7 +2,7 @@
 /** 以思源接口替身验证真实工作台关闭、恢复、抓取失败及图片取舍。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const fixtures = vi.hoisted(() => ({ files: new Map<string, unknown>(), dialogs: [] as Array<{ destroy(): void }>, messages: vi.fn() }));
+const fixtures = vi.hoisted(() => ({ files: new Map<string, unknown>(), dialogs: [] as Array<{ destroy(): void }>, messages: vi.fn(), confirm: vi.fn() }));
 vi.mock("siyuan", () => ({
   Plugin: class {
     app = {};
@@ -25,7 +25,7 @@ vi.mock("siyuan", () => ({
     }
     destroy(): void { this.options.destroyCallback(); this.element.remove(); }
   },
-  getActiveEditor: () => null, openTab: vi.fn(), showMessage: fixtures.messages, confirm: vi.fn(),
+  getActiveEditor: () => null, openTab: vi.fn(), showMessage: fixtures.messages, confirm: fixtures.confirm,
 }));
 vi.mock("../src/review/provider", () => ({ listAvailableModels: vi.fn(), reviewArticleDetailed: vi.fn() }));
 vi.mock("../src/images/localize", () => ({ localizeMarkdownImages: vi.fn() }));
@@ -38,6 +38,7 @@ import { imageInventory } from "../src/review/images";
 import { localizeMarkdownImages } from "../src/images/localize";
 import { appendArticle } from "../src/siyuan/writer";
 import { type CaptureDraft, DRAFT_STORAGE_NAME } from "../src/article/draft";
+import { type CaptureHistory, HISTORY_STORAGE_NAME } from "../src/article/history";
 
 const article = { url: "https://example.com/article", title: "文章标题", markdown: "# 文章标题\n\n原文 ![图](https://example.com/photo.png)" };
 function input(name: string, value: string): void {
@@ -46,11 +47,16 @@ function input(name: string, value: string): void {
 }
 function stored(): CaptureDraft { return fixtures.files.get(DRAFT_STORAGE_NAME) as CaptureDraft; }
 function click(name: string): void { document.querySelector<HTMLButtonElement>(`[data-action="${name}"]`)!.click(); }
+function confirmCancellation(): void { click("cancelReview"); fixtures.confirm.mock.calls.at(-1)![2](); }
 async function ready(): Promise<void> { await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="toggleSettings"]')?.disabled).toBe(false)); }
 async function launch(): Promise<NoospherePlugin> {
   const plugin = new NoospherePlugin(); await plugin.onload(); document.querySelector<HTMLButtonElement>("#entry")!.click(); return plugin;
 }
 async function scrape(): Promise<void> { input("url", article.url); click("scrape"); await ready(); }
+function history(): CaptureHistory { return fixtures.files.get(HISTORY_STORAGE_NAME) as CaptureHistory; }
+function historyAction(operation: string, index = 0): void {
+  document.querySelectorAll<HTMLElement>(".noosphere__history-entry")[index].querySelector<HTMLButtonElement>(`[data-history-action="${operation}"]`)!.click();
+}
 
 describe("workbench regression", () => {
   beforeEach(() => {
@@ -59,7 +65,7 @@ describe("workbench regression", () => {
     Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: () => "<h1>文章标题</h1><p>原文</p><img src='/photo.png'>" }) } });
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown: article.markdown, metadata: { title: article.title } } }) } }) })));
   });
-  afterEach(() => { fixtures.dialogs.at(-1)?.destroy(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+  afterEach(() => { fixtures.dialogs.at(-1)?.destroy(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
   it("restores a read-only article and the destination after closing and restarting the plugin", async () => {
     const plugin = await launch(); await scrape();
@@ -171,7 +177,12 @@ describe("workbench regression", () => {
 
   it("preserves manually edited source metadata and updates the source line once", async () => {
     await launch(); await scrape();
+    expect(document.querySelector<HTMLInputElement>('[data-field="sourceAuthor"]')!.hidden).toBe(true);
+    click("editSource");
     input("sourceAuthor", "张三"); input("sourcePublished", "2026-10-12"); input("sourceAuthor", "李四");
+    expect(stored().article?.author).toBeUndefined();
+    expect(document.querySelector<HTMLButtonElement>('[data-action="review"]')!.disabled).toBe(true);
+    click("confirmSource");
     fixtures.dialogs.at(-1)!.destroy();
     await vi.waitFor(() => expect(stored().article?.author).toBe("李四"));
     expect(stored().article?.publishedAt).toBe("2026-10-12");
@@ -180,6 +191,16 @@ describe("workbench regression", () => {
     expect(stored().markdown).toContain("作者：李四 · 发布时间：2026\\-10\\-12");
     document.querySelector<HTMLButtonElement>("#entry")!.click();
     expect(document.querySelector<HTMLInputElement>('[data-field="sourceAuthor"]')!.value).toBe("李四");
+    expect(document.querySelector('[data-role="sourceAuthorText"]')!.textContent).toBe("李四");
+    expect(document.querySelector('[data-role="draftStatus"]')).toBeNull();
+    expect(document.querySelector('.noosphere__article-toolbar')!.textContent).not.toMatch(/草稿|恢复/);
+  });
+
+  it("does not save unconfirmed source edits when the article is closed", async () => {
+    await launch(); await scrape(); click("editSource"); input("sourceAuthor", "未确定作者");
+    fixtures.dialogs.at(-1)!.destroy(); await launch();
+    expect(stored().article?.author).toBeUndefined(); expect(history().entries[0].draft.article?.author).toBeUndefined();
+    expect(document.querySelector('[data-role="sourceAuthorText"]')!.textContent).toBe("未填写");
   });
 
   it("shows waiting, actual image progress and completion within the same AI review", async () => {
@@ -206,12 +227,337 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-action="reviewImages"]')).toBeNull();
   });
 
-  it("stops the progress bar on failure without showing completion", async () => {
+  it("reports review failures only through SiYuan messages and hides the failed progress", async () => {
     vi.mocked(reviewArticleDetailed).mockRejectedValueOnce(new Error("model timeout"));
     await launch(); await scrape(); click("review"); await ready();
-    expect(document.querySelector('[data-role="reviewProgress"]')!.classList.contains("is-failed")).toBe(true);
-    expect(document.querySelector<HTMLProgressElement>('[data-role="reviewProgressBar"]')!.value).toBe(0);
-    expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("审阅失败");
+    expect(document.querySelector<HTMLElement>('[data-role="reviewProgress"]')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-role="status"]')!.hidden).toBe(true);
+    expect(document.querySelector('.noosphere')!.textContent).not.toContain("model timeout");
+    expect(fixtures.messages).toHaveBeenCalledWith("AI 审阅失败：model timeout", 7000, "error");
     expect(stored().markdown).toBe(article.markdown);
+  });
+
+  it("reports image failures once with a short reason instead of a raw URL warning", async () => {
+    const decisions = imageInventory(article.markdown, article.url).map(item => ({ ...item, status: "failed" as const, error: "图片下载失败：上游服务返回 HTTP 403：请求被拒绝" }));
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce({ article, markdown: article.markdown, summary: "摘要", imageDecisions: decisions, imagesReviewed: 0, imageWarnings: ["很长的图片地址和重复详情"], metadataAccepted: [] });
+    await launch(); await scrape(); fixtures.messages.mockClear(); click("review"); await ready();
+    expect(fixtures.messages.mock.calls.filter(call => call[2] === "error")).toEqual([["图片识别有 1 张未完成，相关图片已保留。图片下载失败：上游服务返回 HTTP 403：请求被拒绝", 7000, "error"]]);
+    expect(stored().imageDecisions[0]).toMatchObject({ status: "failed", remove: false });
+  });
+
+  it("cleans plugin settings, drafts and cache on uninstall and starts fresh on reinstall", async () => {
+    const plugin = await launch(); await scrape(); input("targetDocumentId", "doc");
+    vi.stubGlobal("fetch", vi.fn(async (path: string, options: RequestInit) => {
+      expect(path).toBe("/api/file/removeFile");
+      expect(JSON.parse(options.body as string).path).toBe("/data/storage/petal/noosphere-siyuan");
+      fixtures.files.clear(); return { ok: true, json: async () => ({ code: 0 }) };
+    }));
+    localStorage.setItem("another-plugin", "keep");
+    plugin.onunload(); await plugin.uninstall();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(fixtures.files.size).toBe(0);
+    expect(localStorage.getItem(`noosphere:capture-draft:v1:${window.location.origin}`)).toBeNull();
+    expect(localStorage.getItem(`noosphere:capture-history:v1:${window.location.origin}`)).toBeNull();
+    expect(localStorage.getItem("another-plugin")).toBe("keep");
+    await launch(); expect(document.querySelector<HTMLElement>('[data-view="setup"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("");
+  });
+
+  it("does not recreate records when a captured article returns after uninstall", async () => {
+    let finish: (value: unknown) => void = () => undefined;
+    const plugin = await launch(); input("url", article.url);
+    vi.stubGlobal("fetch", vi.fn((path: string) => path === "/api/file/removeFile"
+      ? Promise.resolve({ ok: true, json: async () => { fixtures.files.clear(); return { code: 0 }; } })
+      : new Promise(resolve => { finish = resolve; })));
+    click("scrape"); await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    plugin.onunload(); await plugin.uninstall();
+    finish({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown: article.markdown } }) } }) });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(fixtures.files.size).toBe(0);
+    expect(localStorage.getItem(`noosphere:capture-draft:v1:${window.location.origin}`)).toBeNull();
+  });
+
+  it("waits for an existing disk write before deleting plugin storage", async () => {
+    const plugin = await launch(); await scrape();
+    const original = plugin.saveData.bind(plugin);
+    let finish: () => void = () => undefined;
+    const events: string[] = [];
+    vi.spyOn(plugin, "saveData").mockImplementationOnce(async (name, data) => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      events.push("write"); return original(name, data);
+    });
+    input("targetDocumentId", "late-write");
+    await vi.waitFor(() => expect(plugin.saveData).toHaveBeenCalled());
+    const remove = vi.fn(async () => { events.push("remove"); fixtures.files.clear(); return { ok: true, json: async () => ({ code: 0 }) }; });
+    vi.stubGlobal("fetch", remove);
+    plugin.onunload(); const cleaned = plugin.uninstall();
+    await Promise.resolve(); expect(remove).not.toHaveBeenCalled();
+    finish(); await cleaned;
+    expect(events).toEqual(["write", "remove"]);
+    expect(fixtures.files.size).toBe(0);
+  });
+
+  it("lists both captured articles, searches them, and restores each article's content", async () => {
+    await launch(); await scrape(); click("editSource"); input("sourceAuthor", "张三"); click("confirmSource");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown: "第二篇正文", metadata: { title: "另一篇文章" } } }) } }) })));
+    input("url", "https://example.com/second"); click("scrape"); await ready(); click("showHistory");
+    expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(2);
+    const search = document.querySelector<HTMLInputElement>('[data-role="historySearch"]')!;
+    search.value = "张三"; search.dispatchEvent(new Event("input"));
+    expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(1);
+    historyAction("view");
+    expect(document.querySelector<HTMLInputElement>('[data-field="url"]')!.value).toBe(article.url);
+    expect(document.querySelector<HTMLInputElement>('[data-field="sourceAuthor"]')!.value).toBe("张三");
+    fixtures.dialogs.at(-1)!.destroy(); await vi.waitFor(() => expect(history().entries).toHaveLength(2));
+    await launch(); click("showHistory"); expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(2);
+  });
+
+  it("opens a history article before explicitly reviewing its complete original", async () => {
+    fixtures.files.set(DRAFT_STORAGE_NAME, { version: 1, updatedAt: Date.now(), article, url: article.url, markdown: "旧审阅稿", reviewedMarkdown: "旧审阅稿", imageDecisions: [], targetDocumentId: "", perspective: "original", savedDocumentId: "" });
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce({ article, markdown: "新审阅稿", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] });
+    await launch(); click("showHistory");
+    expect(document.querySelector('[data-history-action="review"], [data-history-action="import"]')).toBeNull();
+    historyAction("view"); expect(reviewArticleDetailed).not.toHaveBeenCalled();
+    click("review"); await ready();
+    expect(reviewArticleDetailed).toHaveBeenCalledWith(expect.objectContaining({ markdown: article.markdown }), expect.objectContaining({ reviewPerspective: "original" }), article.markdown, expect.any(Object));
+    await vi.waitFor(() => expect(history().entries[0].draft.markdown).toBe("新审阅稿"));
+    expect(history().entries).toHaveLength(1); expect(history().entries[0].draft.article?.markdown).toBe(article.markdown);
+  });
+
+  it("imports a history article from the article page and prevents a second save", async () => {
+    fixtures.files.set(DRAFT_STORAGE_NAME, { version: 1, updatedAt: Date.now(), article, url: article.url, markdown: "处理稿", reviewedMarkdown: "处理稿", imageDecisions: [], targetDocumentId: "20261012100000-abcdefg", perspective: "original", savedDocumentId: "" });
+    vi.mocked(localizeMarkdownImages).mockResolvedValueOnce({ markdown: "本地化处理稿", localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValueOnce("inserted");
+    await launch(); click("showHistory"); historyAction("view");
+    expect(appendArticle).not.toHaveBeenCalled(); click("save"); await ready();
+    expect(appendArticle).toHaveBeenCalledWith("20261012100000-abcdefg", expect.objectContaining({ url: article.url }), "本地化处理稿");
+    await vi.waitFor(() => expect(history().entries[0].draft.savedDocumentId).toBe("20261012100000-abcdefg"));
+    click("showHistory"); historyAction("view"); expect(appendArticle).toHaveBeenCalledOnce();
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+  });
+
+  it("opens a history article without starting an import or choosing a document", async () => {
+    await launch(); await scrape(); click("showHistory"); historyAction("view");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-role="articlePreview"]')!.hidden).toBe(false);
+    expect(appendArticle).not.toHaveBeenCalled();
+  });
+
+  it("deletes the active history article and keeps it deleted after restarting", async () => {
+    await launch(); await scrape(); click("showHistory");
+    historyAction("delete"); expect(fixtures.confirm).toHaveBeenCalled();
+    expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(1);
+    fixtures.confirm.mock.calls.at(-1)![2]();
+    await vi.waitFor(() => expect(history().entries).toEqual([]));
+    expect(stored().article).toBeNull(); expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(0);
+    expect(document.querySelector('[data-role="articleMeta"]')!.textContent).toBe("文章正文");
+    expect(document.querySelector('[data-role="sourceLink"]')!.hasAttribute("href")).toBe(false);
+    fixtures.dialogs.at(-1)!.destroy(); await launch(); click("showHistory");
+    expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(0);
+    expect(appendArticle).not.toHaveBeenCalled();
+  });
+
+  it("previews streaming Markdown without persisting unvalidated output on failure", async () => {
+    let fail!: (error: Error) => void;
+    Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: (_name: string, markdown: string) => `<pre>${markdown}</pre>` }) } });
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      options?.onTextDelta?.('{"title":"生成标题","markdown":"正在生成的正文');
+      return await new Promise((_resolve, reject) => { fail = reject; });
+    });
+    await launch(); await scrape(); click("review");
+    await vi.waitFor(() => expect(document.querySelector('[data-role="articlePreview"]')!.textContent).toContain("正在生成的正文"));
+    expect(document.querySelector<HTMLElement>('[data-role="streamNotice"]')!.hidden).toBe(false);
+    expect(document.querySelector('[data-role="reviewProgressDetail"]')!.textContent).toBe("已输出 7 字");
+    expect(stored().markdown).toBe(article.markdown); expect(history().entries[0].draft.markdown).toBe(article.markdown);
+    fail(new Error("stream interrupted")); await ready();
+    expect(document.querySelector('[data-role="articlePreview"]')!.textContent).toContain("原文");
+    expect(document.querySelector<HTMLElement>('[data-role="streamNotice"]')!.hidden).toBe(true);
+    expect(stored().markdown).toBe(article.markdown);
+  });
+
+  it("shows text during generation and completes with the last normal frame without dumping the tail", async () => {
+    const body = "一二三四五六七八九十";
+    const result = { article, markdown: body, summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    let finish!: () => void;
+    Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: (_name: string, markdown: string) => `<pre>${markdown}</pre>` }) } });
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      options?.onTextDelta?.(JSON.stringify({ title: article.title, markdown: body, summary: "摘要" }));
+      await new Promise<void>(resolve => { finish = resolve; }); options?.onTextReviewed?.(result); return result;
+    });
+    await launch(); await scrape(); vi.useFakeTimers(); click("review"); await vi.advanceTimersByTimeAsync(64);
+    const preview = document.querySelector('[data-role="articlePreview"]')!;
+    expect(preview.textContent).toContain("一二"); expect(preview.textContent).not.toContain(body);
+    expect(document.querySelector('[data-role="reviewState"]')!.textContent).toBe("审阅中");
+    finish(); await vi.advanceTimersByTimeAsync(0);
+    expect(preview.textContent).not.toContain(body);
+    await vi.advanceTimersByTimeAsync(64);
+    expect(preview.textContent).toContain(body); expect(document.querySelector('[data-role="reviewState"]')!.textContent).toBe("已审阅");
+    expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("审阅完成");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="cancelReview"]')!.hidden).toBe(true);
+    expect(stored().markdown).toBe(body);
+  });
+
+  it("continues after dismissing cancellation and only stops after confirming", async () => {
+    let finish!: () => void, signal!: AbortSignal;
+    const result = { article, markdown: "最终正文", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      signal = options!.signal!; await new Promise<void>(resolve => { finish = resolve; }); return result;
+    });
+    await launch(); await scrape(); click("review"); await vi.waitFor(() => expect(finish).toBeDefined());
+    click("cancelReview"); click("cancelReview"); expect(fixtures.confirm).toHaveBeenCalledOnce();
+    expect(fixtures.confirm.mock.calls[0][1]).toContain("恢复到本次审阅开始前"); expect(signal.aborted).toBe(false);
+    fixtures.confirm.mock.calls[0][3](); expect(signal.aborted).toBe(false);
+    confirmCancellation(); await ready(); expect(signal.aborted).toBe(true);
+    expect(stored().markdown).toBe(article.markdown); finish();
+  });
+
+  it("ignores a late cancellation confirmation after completion and during a different review", async () => {
+    let finish!: () => void;
+    const result = { article, markdown: "已完成结果", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async () => { await new Promise<void>(resolve => { finish = resolve; }); return result; });
+    await launch(); await scrape(); click("review"); await vi.waitFor(() => expect(finish).toBeDefined());
+    click("cancelReview"); const staleConfirm = fixtures.confirm.mock.calls.at(-1)![2];
+    finish(); await ready(); staleConfirm(); expect(stored().markdown).toBe(result.markdown);
+    let nextFinish!: () => void, nextSignal!: AbortSignal;
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      nextSignal = options!.signal!; await new Promise<void>(resolve => { nextFinish = resolve; }); return result;
+    });
+    click("review"); await vi.waitFor(() => expect(nextFinish).toBeDefined()); staleConfirm(); expect(nextSignal.aborted).toBe(false);
+    nextFinish(); await ready();
+  });
+
+  it("keeps a text review running in the background and can reopen its live workbench", async () => {
+    let finish!: () => void, signal!: AbortSignal, emit!: (text: string) => void;
+    const result = { article, markdown: "后台生成的完整正文", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: (_name: string, markdown: string) => `<pre>${markdown}</pre>` }) } });
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      signal = options!.signal!; emit = options!.onTextDelta!;
+      emit('{"title":"标题","markdown":"后台'); await new Promise<void>(resolve => { finish = resolve; }); options?.onTextReviewed?.(result); return result;
+    });
+    await launch(); await scrape(); click("review"); await vi.waitFor(() => expect(finish).toBeDefined());
+    fixtures.dialogs.at(-1)!.destroy(); emit('{"title":"标题","markdown":"后台生成的完整正文');
+    expect(signal.aborted).toBe(false); document.querySelector<HTMLButtonElement>("#entry")!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-role="articlePreview"]')!.textContent).toContain(result.markdown));
+    expect(document.querySelector('[data-role="reviewState"]')!.textContent).toBe("审阅中"); expect(reviewArticleDetailed).toHaveBeenCalledOnce();
+    fixtures.dialogs.at(-1)!.destroy(); finish();
+    await vi.waitFor(() => expect(stored().markdown).toBe(result.markdown));
+    await vi.waitFor(() => expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("审阅完成"), 7000));
+    expect(signal.aborted).toBe(false); expect(history().entries[0].draft.markdown).toBe(result.markdown);
+    document.querySelector<HTMLButtonElement>("#entry")!.click(); await ready();
+    expect(document.querySelector('[data-role="reviewState"]')!.textContent).toBe("已审阅");
+  });
+
+  it("surfaces deferred preview errors inside SiYuan and stops the review safely", async () => {
+    let finish!: () => void, signal!: AbortSignal;
+    const result = { article, markdown: "迟到正文", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: (_name: string, markdown: string) => {
+      if (markdown.includes("生成错误")) throw new Error("preview failed"); return `<pre>${markdown}</pre>`;
+    } }) } });
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      signal = options!.signal!; options?.onTextDelta?.('{"title":"标题","markdown":"生成错误');
+      await new Promise<void>(resolve => { finish = resolve; }); return result;
+    });
+    await launch(); await scrape(); click("review"); await vi.waitFor(() => expect(finish).toBeDefined()); await ready();
+    expect(fixtures.messages).toHaveBeenCalledWith("AI 审阅显示失败：preview failed", 7000, "error");
+    expect(signal.aborted).toBe(true); expect(stored().markdown).toBe(article.markdown); finish();
+  });
+
+  it("remembers output language with each article and passes it to the review", async () => {
+    await launch();
+    const choose = (language: string): void => document.querySelector<HTMLButtonElement>(`[data-select-option="workOutputLanguage"][data-value="${language}"]`)!.click();
+    choose("en-US"); await scrape(); await scrape(); choose("zh-CN");
+    click("showHistory"); historyAction("view", 1);
+    expect(document.querySelector<HTMLInputElement>('[data-field="workOutputLanguage"]')!.value).toBe("en-US");
+    expect(document.querySelector('[data-select-label="workOutputLanguage"]')!.textContent).toBe("英文");
+    expect(document.querySelector<HTMLInputElement>('[data-field="outputLanguage"]')!.value).toBe("en-US");
+    fixtures.dialogs.at(-1)!.destroy(); await launch();
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce({ article, markdown: "English result", summary: "summary", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] });
+    click("review"); await ready();
+    expect(reviewArticleDetailed).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ outputLanguage: "en-US" }), expect.any(String), expect.any(Object));
+    expect(history().entries.find(entry => entry.id === stored().historyId)?.draft.outputLanguage).toBe("en-US");
+  });
+
+  it("cancels immediately and ignores the late result of a provider that does not honor abort", async () => {
+    let finish!: () => void, signal!: AbortSignal;
+    const result = { article, markdown: "迟到的审阅稿", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      signal = options!.signal!;
+      options?.onTextDelta?.('{"title":"流式标题","markdown":"生成中');
+      await new Promise<void>(resolve => { finish = resolve; });
+      return result;
+    });
+    await launch(); await scrape(); click("editSource"); input("sourceAuthor", "原作者"); click("confirmSource"); click("review");
+    await vi.waitFor(() => expect(reviewArticleDetailed).toHaveBeenCalled());
+    expect(document.querySelector<HTMLButtonElement>('[data-action="cancelReview"]')!.disabled).toBe(false);
+    confirmCancellation(); await ready();
+    expect(signal.aborted).toBe(true); expect(stored().markdown).toContain("原文"); expect(stored().article?.author).toBe("原作者");
+    expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("已取消");
+    expect(document.querySelector('[data-role="reviewProgress"]')!.classList.contains("is-failed")).toBe(false);
+    finish(); await new Promise(resolve => setTimeout(resolve, 10));
+    expect(stored().markdown).not.toContain("迟到的审阅稿"); expect(history().entries[0].draft.markdown).not.toContain("迟到的审阅稿");
+    expect(fixtures.messages.mock.calls.some(args => args[2] === "error")).toBe(false);
+  });
+
+  it("restores the pre-review article, metadata and image choices when cancelling vision review", async () => {
+    let finish!: () => void;
+    const result = { article: { ...article, author: "AI 补全" }, markdown: "新处理稿\n" + article.markdown, summary: "摘要", imageDecisions: imageInventory(article.markdown, article.url), imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      options?.onTextReviewed?.(result);
+      options?.onImageProgress?.({ decisions: result.imageDecisions.map(item => ({ ...item, remove: true, status: "reviewed" })), reviewed: 1, warnings: [] });
+      await new Promise<void>(resolve => { finish = resolve; }); return result;
+    });
+    await launch(); await scrape(); click("review");
+    await vi.waitFor(() => expect(stored().article?.author).toBe("AI 补全"));
+    confirmCancellation(); await ready();
+    expect(stored().markdown).toBe(article.markdown); expect(stored().article?.author).toBeUndefined();
+    expect(stored().imageDecisions[0].remove).toBe(false); expect(stored().textReviewed).toBe(false);
+    finish(); await new Promise(resolve => setTimeout(resolve, 10)); expect(stored().markdown).toBe(article.markdown);
+  });
+
+  it("keeps a completed review after reopening without offering undo or persisting a backup", async () => {
+    const result = { article: { ...article, author: "AI 作者" }, markdown: "审阅后的正文", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(result);
+    await launch(); await scrape(); click("review"); await ready();
+    await vi.waitFor(() => expect(stored().markdown).toBe(result.markdown));
+    expect(stored()).not.toHaveProperty("reviewBackup");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="cancelReview"]')!.hidden).toBe(true);
+    fixtures.dialogs.at(-1)!.destroy(); await launch();
+    expect(document.querySelector('[data-action="undoReview"]')).toBeNull();
+    expect(stored().markdown).toBe(result.markdown); expect(stored().article?.author).toBe("AI 作者"); expect(stored().reviewInfo?.summary).toBe("摘要");
+    expect(history().entries[0].draft.markdown).toBe(result.markdown);
+    expect(history().entries[0].draft).not.toHaveProperty("reviewBackup");
+  });
+
+  it("restores the last completed result when cancelling a new review after streaming starts", async () => {
+    Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: (_name: string, markdown: string) => `<pre>${markdown}</pre>` }) } });
+    const result = { article: { ...article, author: "已确认作者" }, markdown: "上次完成的审阅稿", summary: "上次摘要", imageDecisions: imageInventory(article.markdown, article.url).map(item => ({ ...item, remove: true, recommendedRemove: true })), imagesReviewed: 1, imageWarnings: [], metadataAccepted: [] };
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(result);
+    await launch(); await scrape(); click("review"); await ready();
+    const previous = structuredClone(stored());
+    let finish!: () => void;
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      options?.onTextDelta?.('{"title":"新标题","markdown":"这次正在生成的正文');
+      await new Promise<void>(resolve => { finish = resolve; });
+      return { ...result, markdown: "迟到的新审阅稿" };
+    });
+    click("review");
+    await vi.waitFor(() => expect(document.querySelector('[data-role="articlePreview"]')!.textContent).toContain("这次正在生成的正文"));
+    confirmCancellation(); await ready();
+    for (const key of ["article", "markdown", "reviewedMarkdown", "imageDecisions", "reviewInfo", "textReviewed", "savedDocumentId"] as const) expect(stored()[key]).toEqual(previous[key]);
+    expect(history().entries[0].draft.markdown).toBe(result.markdown);
+    finish(); await new Promise(resolve => setTimeout(resolve, 10));
+    expect(stored().markdown).toBe(result.markdown);
+  });
+
+  it("does not call the model after cancellation while saving settings", async () => {
+    const plugin = await launch(); await scrape();
+    const original = plugin.saveData.bind(plugin); let finish!: () => void;
+    vi.spyOn(plugin, "saveData").mockImplementation(async (name, data) => {
+      if (name === "settings.json") await new Promise<void>(resolve => { finish = resolve; });
+      return original(name, data);
+    });
+    click("review"); await vi.waitFor(() => expect(finish).toBeDefined());
+    confirmCancellation(); await ready(); finish(); await new Promise(resolve => setTimeout(resolve, 10));
+    expect(reviewArticleDetailed).not.toHaveBeenCalled(); expect(stored().markdown).toBe(article.markdown);
   });
 });

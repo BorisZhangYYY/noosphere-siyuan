@@ -1,6 +1,7 @@
 /** Firecrawl v2 scraper adapter. */
 import { proxyRequest } from "../siyuan/api";
 import type { Article } from "../types";
+import { stripArticleImagePlaceholders } from "../images/reference";
 
 interface FirecrawlResult {
   success?: boolean;
@@ -37,7 +38,7 @@ export async function scrapeWithFirecrawl(rawUrl: string, apiKey: string): Promi
   return {
     url: url.href,
     title: result.data.metadata?.title?.trim() || url.hostname,
-    markdown: result.data.markdown.trim(),
+    markdown: stripArticleImagePlaceholders(result.data.markdown, url.href).trim(),
     author: result.data.metadata?.author,
     publishedAt: result.data.metadata?.publishedTime,
     capturedAt: new Date().toISOString(),

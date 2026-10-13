@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewArticleDetailed } from "../src/review/provider";
-import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, reviewImages } from "../src/review/images";
+import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages } from "../src/review/images";
 import { DEFAULT_SETTINGS, type Article, type Settings } from "../src/types";
+import { RequestCancelledError } from "../src/siyuan/api";
 
 const article: Article = { url: "https://example.com/post", title: "Example", markdown: "# Example\n\nEvidence\n\n![screenshot](https://example.com/pic.png)\n\nEnd" };
 const review = JSON.stringify({ title: "Example", markdown: "## 正文\n\nEvidence\n\nEnd", summary: "Evidence and a relevant screenshot" });
@@ -26,7 +27,53 @@ function mockReview(classification: "PROMOTION" | "RELEVANT", format: Settings["
   return requests;
 }
 
+it("cancels all vision workers without marking images failed or starting more requests", async () => {
+  const controller = new AbortController(), progress = vi.fn();
+  vi.stubGlobal("fetch", vi.fn((_path: string, options: RequestInit) => new Promise((_resolve, reject) => {
+    options.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+  })));
+  const source = { ...article, markdown: Array.from({ length: 5 }, (_, i) => `![${i}](https://example.com/${i}.png)`).join("\n") };
+  const pending = reviewImages(source, "摘要", settings, progress, controller.signal);
+  const assertion = expect(pending).rejects.toBeInstanceOf(RequestCancelledError);
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2)); controller.abort(); await assertion;
+  expect(fetch).toHaveBeenCalledTimes(2); expect(progress).toHaveBeenCalledOnce(); expect(progress.mock.calls[0][0].warnings).toEqual([]);
+});
+
 describe("image review", () => {
+  it("does not download the article page when a scraper mistakes it for an image", async () => {
+    const requests = mockReview("RELEVANT");
+    const source = { ...article, markdown: `![](${article.url})\n![](#article)\n${article.markdown}\n[来源](${article.url})` };
+    const result = await reviewImages(source, "摘要", settings);
+    expect(result.decisions).toHaveLength(1); expect(result.reviewed).toBe(1); expect(result.warnings).toEqual([]);
+    expect(requests).toHaveLength(2); expect(requests[0].url).toBe("https://example.com/pic.png");
+    expect(restoreImages("审阅正文", source)).not.toContain(`![](${article.url})`);
+    const legacy = { full: `![](${article.url})`, alt: "", url: article.url, description: "未能识别，默认保留", status: "failed" as const, recommendedRemove: false, remove: false, error: "HTTP 403" };
+    expect(normalizeImageDecisions([legacy, ...result.decisions], article.url)).toEqual(result.decisions);
+  });
+
+  it("keeps an actual blocked image with one short download failure and no model request", async () => {
+    const body = btoa("<!DOCTYPE html><html>Forbidden</html>");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 403, body } }) })));
+    const result = await reviewImages(article, "摘要", settings);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(result.decisions[0]).toMatchObject({ status: "failed", remove: false, error: "图片下载失败：上游服务返回 HTTP 403：请求被拒绝" });
+    expect(result.warnings).toEqual(["图片 1：图片下载失败：上游服务返回 HTTP 403：请求被拒绝"]);
+    expect(normalizeImageDecisions([{ ...result.decisions[0], error: `上游服务返回 HTTP 403：${body}` }], article.url)[0].error).toBe("上游服务返回 HTTP 403：请求被拒绝");
+  });
+
+  it("identifies a model permission failure separately from image downloads", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_path, options: RequestInit) => {
+      const request = JSON.parse(options.body as string);
+      return { ok: true, json: async () => ({ code: 0, data: request.method === "GET"
+        ? { status: 200, body: "aGVsbG8=", contentType: "image/png" }
+        : { status: 403, body: JSON.stringify({ error: { message: "model permission denied" } }) } }) };
+    }));
+    const result = await reviewImages(article, "摘要", settings);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(result.decisions[0].error).toBe("图片模型请求失败：上游服务返回 HTTP 403：model permission denied");
+    expect(result.decisions[0].remove).toBe(false);
+  });
+
   it("repairs legacy local asset URLs and preserves image decisions", () => {
     const full = "![本地图](assets/captured.jpg)";
     const inventory = imageInventory(full, article.url);
