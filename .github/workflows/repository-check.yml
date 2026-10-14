@@ -18,7 +18,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          required=(README.md LICENSE AGENTS.md CLAUDE.md TODO.md CHANGELOG.md)
+          required=(README.md LICENSE AGENTS.md CLAUDE.md CHANGELOG.md CONTRIBUTING.md .project/development.md)
           for file in "${required[@]}"; do
             test -f "$file" || { echo "Missing required file: $file"; exit 1; }
           done
@@ -27,7 +27,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -R --line-number --exclude-dir=.git '{{[A-Za-z0-9_][A-Za-z0-9_]*}}' README.md CLAUDE.md TODO.md CHANGELOG.md AGENTS.md 2>/dev/null; then
+          if grep -R --line-number --exclude-dir=.git '{{[A-Za-z0-9_][A-Za-z0-9_]*}}' README.md CLAUDE.md CHANGELOG.md AGENTS.md CONTRIBUTING.md .project/development.md 2>/dev/null; then
             echo "Unresolved AI-ProjConf template placeholders found."
             exit 1
           fi

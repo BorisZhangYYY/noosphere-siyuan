@@ -52,7 +52,14 @@ jobs:
           with zipfile.ZipFile(archive) as package:
               assert package.testzip() is None, "Installation ZIP is damaged"
               assert json.loads(package.read("plugin.json"))["version"] == version
-              assert {"index.js", "index.css", "plugin.json", "README.md", ".docs/usage.md"} <= set(package.namelist())
+              assert {"index.js", "index.css", "plugin.json", "README.md", "CONTRIBUTING.md", ".project/development.md", ".docs/images/workbench.png"} <= set(package.namelist())
+              manifest = json.loads(package.read("plugin.json"))
+              assert "LICENSE" in package.namelist(), "Plugin license is missing"
+              for path in manifest["readme"].values():
+                  assert path in package.namelist(), f"Declared README is missing: {path}"
+              for field in ("icon", "preview"):
+                  if manifest.get(field):
+                      assert manifest[field] in package.namelist(), f"Declared {field} is missing"
           changelog = pathlib.Path("CHANGELOG.md").read_text()
           section = re.search(r"^## \[" + re.escape(version) + r"\] - [^\n]+\n([\s\S]*?)(?=^## \[|\Z)", changelog, re.MULTILINE)
           assert section, "Release changelog is missing"
@@ -72,5 +79,6 @@ jobs:
           gh release create "$GITHUB_REF_NAME"
           "package.zip"
           --verify-tag
+          --latest
           --title "知流 ${GITHUB_REF_NAME}"
           --notes-file "$RUNNER_TEMP/release-notes.md"
