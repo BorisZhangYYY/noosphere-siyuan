@@ -1,5 +1,6 @@
 /** 文章历史与当前草稿分开保存；删除历史不会删除已导入的思源笔记。 */
 import { draftContentKey, storageTimeout, validDraft, type CaptureDraft } from "./draft";
+import { restoreArticleTime } from "./time";
 
 export const HISTORY_STORAGE_NAME = "capture-history.json";
 const RECOVERY_KEY = "noosphere:capture-history:v1";
@@ -19,7 +20,8 @@ function readHistory(value: unknown): CaptureHistory | null {
     ids.add(entry.id);
     return true;
   });
-  return { ...history, entries };
+  return { ...history, entries: entries.map(entry => ({ ...entry,
+    draft: { ...entry.draft, article: restoreArticleTime(entry.draft.article!, entry.capturedAt) } })) };
 }
 
 export class CaptureHistoryStore {
@@ -55,7 +57,7 @@ export class CaptureHistoryStore {
     // Docker 的 HTTP 浏览器前端可能没有 randomUUID，仍需正常抓取和保留历史。
     const id = globalThis.crypto?.randomUUID?.() || `capture-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const capturedAt = Date.parse(draft.article.capturedAt || "") || Date.now();
-    const snapshot = structuredClone({ ...draft, historyId: id });
+    const snapshot = structuredClone({ ...draft, article: restoreArticleTime(draft.article, capturedAt), historyId: id });
     this.state.entries.unshift({ id, capturedAt, draft: snapshot });
     this.changed();
     return id;

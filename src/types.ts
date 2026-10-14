@@ -39,6 +39,8 @@ export interface Article {
   author?: string;
   publishedAt?: string;
   capturedAt?: string;
+  /** 旧文章仅能恢复历史记录时间时单独保存，不作为真实抓取时间。 */
+  recordedAt?: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

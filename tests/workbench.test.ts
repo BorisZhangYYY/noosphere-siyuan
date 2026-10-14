@@ -28,8 +28,38 @@ vi.mock("siyuan", () => ({
   getActiveEditor: () => null, openTab: vi.fn(), showMessage: fixtures.messages, confirm: fixtures.confirm,
 }));
 vi.mock("../src/review/provider", () => ({ listAvailableModels: vi.fn(), reviewArticleDetailed: vi.fn() }));
-vi.mock("../src/images/localize", () => ({ localizeMarkdownImages: vi.fn() }));
+vi.mock("../src/images/localize", async importOriginal => ({ ...await importOriginal<typeof import("../src/images/localize")>(), localizeMarkdownImages: vi.fn() }));
 vi.mock("../src/siyuan/writer", () => ({ validateTargetDocument: vi.fn(), appendArticle: vi.fn() }));
+// 原生键盘行为在思源现场验收；这里验证工作台与原生编辑器之间的数据和生命周期。
+vi.mock("../src/article/editor", async importOriginal => ({
+  ...await importOriginal<typeof import("../src/article/editor")>(),
+  NativeArticleEditor: class {
+    private content = document.createElement("div");
+    private state: { markdown: string; nativeMarkdown: string; blockDOM: string };
+    private last: string;
+    private readOnly = true;
+    constructor(_app: unknown, host: HTMLElement, _article: unknown, markdown: string,
+      state: { markdown: string; nativeMarkdown: string; blockDOM: string } | undefined,
+      private onChange: (state: typeof this.state, title: string) => void) {
+      this.state = state || { markdown, nativeMarkdown: markdown, blockDOM: `<div>${markdown}</div>` };
+      this.last = markdown; this.content.textContent = markdown; this.content.dataset.role = "nativeContent";
+      host.replaceChildren(this.content);
+      this.content.addEventListener("input", () => this.flush());
+    }
+    flush(): void {
+      if (this.readOnly || this.last === this.content.textContent) return;
+      this.last = this.content.textContent || "";
+      this.state = { markdown: this.last, nativeMarkdown: this.last, blockDOM: `<div>${this.last}</div>` };
+      this.onChange(this.state, this.last.match(/^#+ (.+)/)?.[1] || "文章标题");
+    }
+    setReadOnly(value: boolean): void { this.readOnly = value; this.content.setAttribute("contenteditable", String(!value)); }
+    setArticle(): void {}
+    focus(): void { this.content.focus(); }
+    isUploading(): boolean { return false; }
+    snapshot(): typeof this.state { return this.state; }
+    destroy(): void { this.content.remove(); }
+  },
+}));
 
 import NoospherePlugin from "../src/index";
 import { DEFAULT_SETTINGS } from "../src/types";
@@ -67,9 +97,114 @@ describe("workbench regression", () => {
   });
   afterEach(() => { fixtures.dialogs.at(-1)?.destroy(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
+  it("keeps the capture URL independent and clears it when entering and leaving history", async () => {
+    await launch(); await scrape();
+    expect(document.querySelector<HTMLInputElement>('[data-field="url"]')!.value).toBe(article.url);
+    expect(document.querySelector<HTMLElement>('[data-role="status"]')!.hidden).toBe(true);
+    input("url", "https://example.com/new"); click("showHistory"); click("showCapture");
+    expect(document.querySelector<HTMLInputElement>('[data-field="url"]')!.value).toBe("");
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toContain("原文");
+    click("showHistory"); historyAction("view");
+    expect(document.querySelector<HTMLInputElement>('[data-field="url"]')!.value).toBe("");
+  });
+
+  it("uses the same native content and reading position across read-only and edit mode", async () => {
+    await launch(); await scrape();
+    const content = document.querySelector('[data-role="nativeContent"]');
+    const scroll = document.querySelector<HTMLElement>('[data-role="articleScroll"]')!;
+    scroll.scrollTop = 340; click("editArticle");
+    expect(document.querySelector('[data-role="nativeContent"]')).toBe(content); expect(scroll.scrollTop).toBe(340);
+    click("confirmArticle");
+    expect(document.querySelector('[data-role="nativeContent"]')).toBe(content); expect(scroll.scrollTop).toBe(340);
+  });
+
+  it("stops following after the body closes while image review is still running", async () => {
+    let finish!: () => void, imageProgress!: () => void;
+    const result = { article, markdown: "正文已完成", summary: "摘要", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
+    Object.assign(window, { Lute: { New: () => ({ ProtylePreviewStr: (_name: string, markdown: string) => `<p>${markdown}</p>` }) } });
+    vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_article, _settings, _markdown, options) => {
+      options?.onTextDelta?.(JSON.stringify({ title: "标题", markdown: result.markdown, summary: result.summary }));
+      options?.onTextReviewed?.(result);
+      imageProgress = () => options?.onImageProgress?.({ decisions: [], reviewed: 0, warnings: [] });
+      await new Promise<void>(resolve => { finish = resolve; }); return result;
+    });
+    await launch(); await scrape(); click("review");
+    await vi.waitFor(() => expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toContain(result.markdown));
+    await vi.waitFor(() => expect(document.querySelector<HTMLElement>('[data-role="streamNotice"]')!.hidden).toBe(true));
+    const scroll = document.querySelector<HTMLElement>('[data-role="articleScroll"]')!;
+    expect(document.querySelector<HTMLButtonElement>('[data-action="cancelReview"]')!.hidden).toBe(false);
+    expect(scroll.dataset.streamFollowing).toBeUndefined(); scroll.scrollTop = 123; imageProgress();
+    expect(scroll.dataset.streamFollowing).toBeUndefined(); expect(scroll.scrollTop).toBe(123);
+    finish(); await ready();
+  });
+
+  it("confirms native edits as read-only without creating a document and restores them after restarting", async () => {
+    const plugin = await launch(); await scrape(); click("editArticle");
+    const content = document.querySelector<HTMLElement>('[data-role="nativeContent"]')!;
+    expect(content.getAttribute("contenteditable")).toBe("true");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="review"]')!.disabled).toBe(true);
+    content.textContent = "# 修改后的标题\n\n人工整理的正文";
+    content.dispatchEvent(new Event("input")); click("confirmArticle");
+    await vi.waitFor(() => expect(stored().bodyEdited).toBe(true));
+    expect(content.getAttribute("contenteditable")).toBe("false");
+    expect(stored()).toMatchObject({ bodyEdited: true, markdown: content.textContent, article: { title: "修改后的标题", markdown: article.markdown } });
+    expect(stored().editorState?.blockDOM).toContain("人工整理");
+    expect(appendArticle).not.toHaveBeenCalled();
+    plugin.onunload(); await launch();
+    expect(document.querySelector('[data-role="nativeContent"]')?.textContent).toContain("人工整理的正文");
+    expect(document.querySelector('[data-role="articleMode"]')?.textContent).toBe("只读");
+    expect(history().entries[0].draft.editorState).toEqual(stored().editorState);
+  });
+
+  it("flushes the final native input on close even before an input event", async () => {
+    await launch(); await scrape(); click("editArticle");
+    document.querySelector<HTMLElement>('[data-role="nativeContent"]')!.textContent = "# 标题\n\n最后一次输入";
+    fixtures.dialogs.at(-1)!.destroy();
+    await vi.waitFor(() => expect(stored().markdown).toContain("最后一次输入"));
+    document.querySelector<HTMLButtonElement>("#entry")!.click();
+    expect(document.querySelector('[data-role="nativeContent"]')?.textContent).toContain("最后一次输入");
+  });
+
+  it("reviews the edited content and restores its native formatting on failure", async () => {
+    await launch(); await scrape(); click("editArticle");
+    const content = document.querySelector<HTMLElement>('[data-role="nativeContent"]')!;
+    content.textContent = "# 新标题\n\n人工改写后的正文"; click("confirmArticle");
+    await vi.waitFor(() => expect(stored().editorState).toBeDefined());
+    const before = structuredClone(stored().editorState);
+    vi.mocked(reviewArticleDetailed).mockRejectedValueOnce(new Error("offline"));
+    click("review"); await ready();
+    expect(reviewArticleDetailed.mock.calls[0][2]).toContain("人工改写后的正文");
+    expect(stored().editorState).toEqual(before);
+    expect(document.querySelector('[data-role="nativeContent"]')?.textContent).toContain("人工改写后的正文");
+  });
+
+  it("keeps native structure when updating source metadata and passes it to the writer", async () => {
+    await launch(); await scrape(); click("editArticle");
+    document.querySelector<HTMLElement>('[data-role="nativeContent"]')!.textContent = "# 标题\n\n保留格式";
+    click("confirmArticle"); await vi.waitFor(() => expect(stored().editorState).toBeDefined());
+    const blockDOM = stored().editorState!.blockDOM;
+    click("editSource"); input("sourceAuthor", "作者"); click("confirmSource");
+    expect(stored().editorState?.blockDOM).toBe(blockDOM);
+    vi.mocked(localizeMarkdownImages).mockImplementationOnce(async markdown => ({ markdown, localized: 0, warnings: [] }));
+    vi.mocked(appendArticle).mockResolvedValueOnce("inserted");
+    input("targetDocumentId", "20261012100000-abcdefg"); click("save"); await ready();
+    expect(appendArticle.mock.calls[0][3]).toBe(blockDOM);
+    expect(appendArticle.mock.calls[0][1].author).toBe("作者");
+  });
+
+  it("shows the historical record time for a legacy article without claiming a capture time", async () => {
+    fixtures.files.set(DRAFT_STORAGE_NAME, { version: 1, updatedAt: 1791858929095, article, url: article.url,
+      markdown: article.markdown, reviewedMarkdown: "", imageDecisions: [], targetDocumentId: "", perspective: "original", savedDocumentId: "" });
+    await launch();
+    expect(document.querySelector('[data-role="sourceTimeLabel"]')?.textContent).toBe("记录时间（旧版本）");
+    expect(document.querySelector('[data-role="sourceCaptured"]')?.textContent).not.toBe("未记录");
+    expect(stored().article?.capturedAt).toBeUndefined();
+  });
+
   it("restores a read-only article and the destination after closing and restarting the plugin", async () => {
     const plugin = await launch(); await scrape();
-    expect(document.querySelector<HTMLElement>('[data-role="articlePreview"]')?.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-role="articleEditor"]')?.hidden).toBe(false);
     expect(document.querySelector('[data-action="edit"], [data-field="markdown"]')).toBeNull();
     input("targetDocumentId", "20261012100000-abcdefg");
     fixtures.dialogs.at(-1)!.destroy();
@@ -78,7 +213,7 @@ describe("workbench regression", () => {
     plugin.onunload(); await Promise.resolve(); await Promise.resolve();
     await launch();
     expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("20261012100000-abcdefg");
-    expect(document.querySelector<HTMLElement>('[data-role="articlePreview"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-role="articleEditor"]')!.hidden).toBe(false);
   });
 
   it("preserves the current article when a changed URL fails to scrape", async () => {
@@ -87,7 +222,7 @@ describe("workbench regression", () => {
     expect(stored().markdown).toBe(article.markdown);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); })); click("scrape"); await ready();
     expect((fixtures.files.get(DRAFT_STORAGE_NAME) as CaptureDraft).markdown).toBe(article.markdown);
-    expect(document.querySelector<HTMLElement>('[data-role="articlePreview"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-role="articleEditor"]')!.hidden).toBe(false);
   });
 
   it("restores the reviewed draft and image choices after closing", async () => {
@@ -116,7 +251,7 @@ describe("workbench regression", () => {
     vi.mocked(appendArticle).mockResolvedValueOnce("inserted");
     await launch(); await scrape(); input("targetDocumentId", "20261012100000-abcdefg"); click("save"); await ready(); fixtures.dialogs.at(-1)!.destroy();
     document.querySelector<HTMLButtonElement>("#entry")!.click();
-    expect(document.querySelector<HTMLElement>('[data-role="articlePreview"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-role="articleEditor"]')!.hidden).toBe(false);
     expect(document.querySelector<HTMLElement>('[data-role="saved"]')!.hidden).toBe(false);
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
   });
@@ -188,7 +323,7 @@ describe("workbench regression", () => {
     expect(stored().article?.publishedAt).toBe("2026-10-12");
     expect(stored().article?.markdown).toBe(article.markdown);
     expect(stored().markdown.match(/> 来源：/g)).toHaveLength(1);
-    expect(stored().markdown).toContain("作者：李四 · 发布时间：2026\\-10\\-12");
+    expect(stored().markdown).toContain("作者：李四\n>\n> 发布时间：2026\\-10\\-12");
     document.querySelector<HTMLButtonElement>("#entry")!.click();
     expect(document.querySelector<HTMLInputElement>('[data-field="sourceAuthor"]')!.value).toBe("李四");
     expect(document.querySelector('[data-role="sourceAuthorText"]')!.textContent).toBe("李四");
@@ -306,7 +441,7 @@ describe("workbench regression", () => {
     search.value = "张三"; search.dispatchEvent(new Event("input"));
     expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(1);
     historyAction("view");
-    expect(document.querySelector<HTMLInputElement>('[data-field="url"]')!.value).toBe(article.url);
+    expect(document.querySelector<HTMLInputElement>('[data-field="url"]')!.value).toBe("");
     expect(document.querySelector<HTMLInputElement>('[data-field="sourceAuthor"]')!.value).toBe("张三");
     fixtures.dialogs.at(-1)!.destroy(); await vi.waitFor(() => expect(history().entries).toHaveLength(2));
     await launch(); click("showHistory"); expect(document.querySelectorAll(".noosphere__history-entry")).toHaveLength(2);
@@ -330,7 +465,7 @@ describe("workbench regression", () => {
     vi.mocked(appendArticle).mockResolvedValueOnce("inserted");
     await launch(); click("showHistory"); historyAction("view");
     expect(appendArticle).not.toHaveBeenCalled(); click("save"); await ready();
-    expect(appendArticle).toHaveBeenCalledWith("20261012100000-abcdefg", expect.objectContaining({ url: article.url }), "本地化处理稿");
+    expect(appendArticle).toHaveBeenCalledWith("20261012100000-abcdefg", expect.objectContaining({ url: article.url }), "本地化处理稿", undefined);
     await vi.waitFor(() => expect(history().entries[0].draft.savedDocumentId).toBe("20261012100000-abcdefg"));
     click("showHistory"); historyAction("view"); expect(appendArticle).toHaveBeenCalledOnce();
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
@@ -339,7 +474,7 @@ describe("workbench regression", () => {
   it("opens a history article without starting an import or choosing a document", async () => {
     await launch(); await scrape(); click("showHistory"); historyAction("view");
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
-    expect(document.querySelector<HTMLElement>('[data-role="articlePreview"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-role="articleEditor"]')!.hidden).toBe(false);
     expect(appendArticle).not.toHaveBeenCalled();
   });
 
@@ -370,7 +505,7 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-role="reviewProgressDetail"]')!.textContent).toBe("已输出 7 字");
     expect(stored().markdown).toBe(article.markdown); expect(history().entries[0].draft.markdown).toBe(article.markdown);
     fail(new Error("stream interrupted")); await ready();
-    expect(document.querySelector('[data-role="articlePreview"]')!.textContent).toContain("原文");
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toContain("原文");
     expect(document.querySelector<HTMLElement>('[data-role="streamNotice"]')!.hidden).toBe(true);
     expect(stored().markdown).toBe(article.markdown);
   });
@@ -391,7 +526,9 @@ describe("workbench regression", () => {
     finish(); await vi.advanceTimersByTimeAsync(0);
     expect(preview.textContent).not.toContain(body);
     await vi.advanceTimersByTimeAsync(64);
-    expect(preview.textContent).toContain(body); expect(document.querySelector('[data-role="reviewState"]')!.textContent).toBe("已审阅");
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toContain(body);
+    expect(document.querySelector<HTMLElement>('[data-role="articleEditor"]')!.hidden).toBe(false);
+    expect(document.querySelector('[data-role="reviewState"]')!.textContent).toBe("已审阅");
     expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("审阅完成");
     expect(document.querySelector<HTMLButtonElement>('[data-action="cancelReview"]')!.hidden).toBe(true);
     expect(stored().markdown).toBe(body);

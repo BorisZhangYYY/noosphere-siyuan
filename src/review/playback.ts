@@ -1,4 +1,5 @@
 /** 根据文章长度、生成时长和到达速度平滑输出，持续追赶短缓冲，不在结束时批量补字。 */
+import { stripSourceMetadata } from "../article/compose";
 export class ReviewTextPlayback {
   private readonly segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
   private units: string[] = [];
@@ -151,8 +152,8 @@ export class ReviewTextPlayback {
 
 /** 系统来源行不参与逐字输出，正文使用校验后的最终内容补齐队列。 */
 export function reviewPlaybackContent(markdown: string, fallbackTitle: string): { title: string; markdown: string } {
+  markdown = stripSourceMetadata(markdown);
   const heading = markdown.match(/^#{1,6}\s+([^\n]+)\n+/);
   let body = heading ? markdown.slice(heading[0].length).trim() : markdown.trim();
-  body = body.replace(/^> 来源：<[^\n]+(?:\n|$)\s*/, "").trim();
   return { title: heading?.[1] || fallbackTitle, markdown: body };
 }

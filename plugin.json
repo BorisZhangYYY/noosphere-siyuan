@@ -2,8 +2,8 @@
   "name": "noosphere-siyuan",
   "author": "BorisZhangYYY",
   "url": "https://github.com/BorisZhangYYY/noosphere-siyuan",
-  "version": "0.1.3",
-  "minAppVersion": "3.7.0",
+  "version": "0.1.4",
+  "minAppVersion": "3.8.6",
   "backends": [
     "windows",
     "linux",
@@ -31,5 +31,6 @@
     "web clipper",
     "AI",
     "文章采集"
-  ]
+  ],
+  "disabledInPublish": true
 }

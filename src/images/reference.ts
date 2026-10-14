@@ -16,6 +16,18 @@ export function resolveImageReference(raw: string, articleUrl: string): string {
   } catch { return ""; }
 }
 
+/** 微信同一资源的尺寸、协议和追踪参数不改变配图身份；其他来源保持原地址。 */
+export function imageIdentity(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    if (url.hostname === "mmbiz.qpic.cn" && /^\/(?:sz_)?mmbiz_/.test(url.pathname)) {
+      return `https://${url.hostname}${url.pathname.replace(/\/\d+$/, "")}`;
+    }
+    return url.href;
+  } catch { return raw.split("#")[0]; }
+}
+
 /** 抓取器偶尔把文章链接写成图片，含片段的同页链接也不是配图。 */
 export function isArticleImagePlaceholder(raw: string, articleUrl: string): boolean {
   if (localAssetPath(raw)) return false;

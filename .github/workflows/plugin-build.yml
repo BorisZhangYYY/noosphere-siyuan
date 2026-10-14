@@ -26,7 +26,7 @@ jobs:
           name: noosphere-siyuan-plugin
           path: package.zip
 
-  # MVP 版本只发布 GitHub 安装包；构建通过后才能创建预览 Release。
+  # 构建和安装包校验通过后发布正式 package.zip，供集市检查和安装。
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
@@ -56,9 +56,7 @@ jobs:
           changelog = pathlib.Path("CHANGELOG.md").read_text()
           section = re.search(r"^## \[" + re.escape(version) + r"\] - [^\n]+\n([\s\S]*?)(?=^## \[|\Z)", changelog, re.MULTILINE)
           assert section, "Release changelog is missing"
-          assert "MVP 预览版" in section[1], "This workflow only publishes MVP previews"
-          filename = f"noosphere-siyuan-{tag}.zip"
-          archive.rename(filename)
+          filename = "package.zip"
           digest = hashlib.sha256(pathlib.Path(filename).read_bytes()).hexdigest()
           notes = section[1].strip() + "\n\n### 安装与验证\n\n"
           notes += f"下载 `{filename}`，解压到思源工作空间的 `data/plugins/noosphere-siyuan/`，然后重新启用插件或重启思源。\n\n"
@@ -66,13 +64,13 @@ jobs:
           notes += f"安装包 SHA-256：`{digest}`\n"
           pathlib.Path(os.environ["RUNNER_TEMP"], "release-notes.md").write_text(notes)
           PY
-      - name: Publish MVP preview on GitHub
+      - name: Publish package on GitHub
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          "noosphere-siyuan-${GITHUB_REF_NAME}.zip"
-          --verify-tag --prerelease --latest=false
-          --title "知流 ${GITHUB_REF_NAME} · MVP 预览版"
+          "package.zip"
+          --verify-tag
+          --title "知流 ${GITHUB_REF_NAME}"
           --notes-file "$RUNNER_TEMP/release-notes.md"

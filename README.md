@@ -41,17 +41,19 @@ Image Localization
 SiYuan Document
 ```
 
-## v0.1.3（MVP 预览版）
+## v0.1.4
 
-本版以 MVP 预览版发布，可从 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases/tag/v0.1.3) 下载 `noosphere-siyuan-v0.1.3.zip` 手动安装，也可运行 `npm run package` 本地打包，暂不在思源集市发布。已知限制和后续改进记录在 [TODO.md](TODO.md)。
+本版增加知流弹窗内的思源原生正文编辑，要求思源笔记 **3.8.6 或更新版本**。点击“编辑”整理文章，点击“确定”回到只读；正文与原生块格式保留在知流记录中，不创建草稿笔记或目录。点击“保存文章”才正式写入目标思源文档。
+
+可运行 `npm run package` 生成 `package.zip`。正式发布的安装包见 [GitHub Releases](https://github.com/BorisZhangYYY/noosphere-siyuan/releases)，安装和使用步骤见 [.docs/usage.md](.docs/usage.md)。首次集市上架仍需提交社区集市审核，已知限制见 [TODO.md](TODO.md)。
 
 - [x] 初始化可构建的 SiYuan 插件工程
 - [x] 使用 Firecrawl 抓取 URL 正文与元数据
 - [x] 按供应商配置 Kimi、火山引擎、MiniMax、智谱及常见国际模型，也可填写自定义接口
-- [x] 草稿自动保留、只读文章预览、可选 AI 审阅
+- [x] 文章自动保留、原生正文编辑与只读切换、可选 AI 审阅
 - [x] 自定义审阅视角与自然语言文章格式；AI 补全有原文证据的缺失元数据
 - [x] 可选图片审阅；建议移除的图片可在保存前恢复
-- [x] 来源信息支持编辑与确定；图片缩略图与大图正确读取思源本地资源
+- [x] 来源元数据按字段分行展示，区分抓取时间与旧版本记录时间；来源信息支持编辑与确定；图片缩略图与大图正确读取思源本地资源
 - [x] 图片本地化；失败时保留原链接
 - [x] 写入指定思源文档 ID 或当前打开的文档
 - [x] 正文与信息栏独立滚动，保存位置固定显示；AI 审阅展示实时进度
