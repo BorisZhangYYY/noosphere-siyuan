@@ -25,7 +25,7 @@ vi.mock("siyuan", () => ({
     }
     destroy(): void { this.options.destroyCallback(); this.element.remove(); }
   },
-  getActiveEditor: () => null, openTab: vi.fn(), showMessage: fixtures.messages, confirm: fixtures.confirm,
+  openTab: vi.fn(), showMessage: fixtures.messages, confirm: fixtures.confirm,
 }));
 vi.mock("../src/review/provider", () => ({ listAvailableModels: vi.fn(), reviewArticleDetailed: vi.fn() }));
 vi.mock("../src/images/localize", async importOriginal => ({ ...await importOriginal<typeof import("../src/images/localize")>(), localizeMarkdownImages: vi.fn() }));
@@ -69,6 +69,7 @@ import { localizeMarkdownImages } from "../src/images/localize";
 import { appendArticle } from "../src/siyuan/writer";
 import { type CaptureDraft, DRAFT_STORAGE_NAME } from "../src/article/draft";
 import { type CaptureHistory, HISTORY_STORAGE_NAME } from "../src/article/history";
+import { openTab } from "siyuan";
 
 const article = { url: "https://example.com/article", title: "文章标题", markdown: "# 文章标题\n\n原文 ![图](https://example.com/photo.png)" };
 function input(name: string, value: string): void {
@@ -96,6 +97,63 @@ describe("workbench regression", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown: article.markdown, metadata: { title: article.title } } }) } }) })));
   });
   afterEach(() => { fixtures.dialogs.at(-1)?.destroy(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+
+  it("requires an explicit destination and offers no current-document shortcut", async () => {
+    await launch(); await scrape();
+    expect(document.querySelector('[data-action="current"]')).toBeNull();
+    expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+  });
+
+  it("keeps destination choices per article and starts a successful new capture with no destination", async () => {
+    await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa");
+    input("url", "https://example.com/second"); click("scrape"); await ready();
+    expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("");
+    click("showHistory"); historyAction("view", 1);
+    expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("20261014100000-aaaaaaa");
+    click("showHistory"); historyAction("view", 0);
+    expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("");
+  });
+
+  it("does not use the legacy global destination for an empty history selection", async () => {
+    fixtures.files.set("settings.json", { ...fixtures.files.get("settings.json") as object, targetDocumentId: "20261014100000-aaaaaaa" });
+    const draft = { version: 1, updatedAt: Date.now(), article, url: "", markdown: article.markdown, reviewedMarkdown: "", imageDecisions: [], targetDocumentId: "", perspective: "original", savedDocumentId: "" };
+    fixtures.files.set(HISTORY_STORAGE_NAME, { version: 1, updatedAt: Date.now(), entries: [{ id: "old", capturedAt: Date.now(), draft }] });
+    await launch();
+    expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("");
+    click("showHistory"); historyAction("view");
+    expect(document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!.value).toBe("");
+  });
+
+  it("preserves the actual saved destination across selection changes and blocks saving to it twice", async () => {
+    vi.mocked(localizeMarkdownImages).mockResolvedValueOnce({ markdown: article.markdown, localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValueOnce("inserted");
+    await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
+    input("targetDocumentId", "20261014100000-aaaaaaa");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+    input("targetDocumentId", "20261014100000-bbbbbbb");
+    expect(stored().savedDocumentId).toBe("20261014100000-aaaaaaa");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
+    input("targetDocumentId", " 20261014100000-aaaaaaa "); click("save");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+    expect(appendArticle).toHaveBeenCalledOnce();
+    input("targetDocumentId", "20261014100000-bbbbbbb"); click("openSaved");
+    expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: "20261014100000-aaaaaaa" } }));
+  });
+
+  it("retains the saved-document link after editing and allows saving the changed content", async () => {
+    vi.mocked(localizeMarkdownImages).mockResolvedValueOnce({ markdown: article.markdown, localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValueOnce("inserted");
+    await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
+    click("editArticle"); document.querySelector('[data-role="nativeContent"]')!.textContent = "# 修改后的标题\n\n修改正文"; click("confirmArticle");
+    await vi.waitFor(() => expect(stored().savedContentChanged).toBe(true));
+    expect(stored().savedDocumentId).toBe("20261014100000-aaaaaaa");
+    expect(document.querySelector<HTMLElement>('[data-role="saved"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
+    fixtures.dialogs.at(-1)!.destroy(); await launch();
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
+    expect(stored().savedContentChanged).toBe(true);
+  });
 
   it("keeps the capture URL independent and clears it when entering and leaving history", async () => {
     await launch(); await scrape();

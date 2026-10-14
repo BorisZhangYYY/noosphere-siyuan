@@ -137,7 +137,7 @@
 .noosphere__asset-state.is-failed { color:var(--b3-theme-error); }
 .noosphere__save-card { box-shadow:0 -3px 12px rgba(0,0,0,.035); }
 .noosphere__save-card label { font-size:12px; }
-.noosphere__save-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+.noosphere__save-actions { display:grid; grid-template-columns:1fr; gap:8px; margin-top:10px; }
 .noosphere__save-actions .b3-button { min-width:0; font-size:13px; }
 .noosphere__status { margin:12px 0 0; color:var(--b3-theme-on-surface); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
 .noosphere__saved { display:flex; justify-content:space-between; align-items:center; gap:6px; margin-top:12px; padding-top:12px; border-top:1px solid var(--ns-border); font-size:11px; }

@@ -27,6 +27,8 @@ export interface CaptureDraft {
   perspective: string;
   outputLanguage?: import("../review/language").OutputLanguage;
   savedDocumentId: string;
+  /** 已导入的文档独立于本次选择；正文变化后允许再次保存，仍能打开此前导入的文档。 */
+  savedContentChanged?: boolean;
   reviewInfo?: { summary: string; completedAt: string; model: string; perspective: string };
   textReviewed?: boolean;
   historyId?: string;
@@ -38,7 +40,7 @@ export interface CaptureDraft {
 export interface ArticleEditorState { markdown: string; nativeMarkdown: string; blockDOM: string; fullBlockDOM?: string }
 
 /** 本次审阅开始前的临时快照，仅供进行中取消时恢复，不随草稿保存。 */
-export type ReviewSnapshot = Pick<CaptureDraft, "article" | "markdown" | "reviewedMarkdown" | "imageDecisions" | "reviewInfo" | "textReviewed" | "savedDocumentId" | "editorState" | "bodyEdited">;
+export type ReviewSnapshot = Pick<CaptureDraft, "article" | "markdown" | "reviewedMarkdown" | "imageDecisions" | "reviewInfo" | "textReviewed" | "savedDocumentId" | "savedContentChanged" | "editorState" | "bodyEdited">;
 
 /** 忽略损坏或不兼容的文件，避免恢复过程阻止工作台打开。 */
 export function validDraft(value: unknown): value is CaptureDraft {
@@ -51,6 +53,7 @@ export function validDraft(value: unknown): value is CaptureDraft {
     && (draft.textReviewed === undefined || typeof draft.textReviewed === "boolean")
     && (draft.historyId === undefined || typeof draft.historyId === "string")
     && (draft.bodyEdited === undefined || typeof draft.bodyEdited === "boolean")
+    && (draft.savedContentChanged === undefined || typeof draft.savedContentChanged === "boolean")
     && (!draft.editorState || [draft.editorState.markdown, draft.editorState.nativeMarkdown, draft.editorState.blockDOM].every(item => typeof item === "string"))
     && (!draft.editorState || draft.editorState.fullBlockDOM === undefined || typeof draft.editorState.fullBlockDOM === "string")
     && (draft.outputLanguage === undefined || ["follow_ui", "source", "zh-CN", "en-US"].includes(draft.outputLanguage))

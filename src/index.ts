@@ -1,5 +1,5 @@
 /** SiYuan frontend plugin entry and capture workflow. */
-import { Dialog, Plugin, confirm, getActiveEditor, openTab, showMessage } from "siyuan";
+import { Dialog, Plugin, confirm, openTab, showMessage } from "siyuan";
 import { scrapeWithFirecrawl } from "./crawler/firecrawl";
 import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
 import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, type ImageDecision, type ImageReviewResult } from "./review/images";
@@ -200,6 +200,7 @@ export default class NoospherePlugin extends Plugin {
     let reviewing = false;
     let cancelConfirmationOpen = false;
     let savedDocumentId = draft?.savedDocumentId || "";
+    let savedContentChanged = draft?.savedContentChanged || false;
     let reviewedMarkdown = draft?.reviewedMarkdown || "";
     let imageDecisions: ImageDecision[] = draft?.imageDecisions.map(item => ({ ...item })) || [];
     if (article) imageDecisions = normalizeImageDecisions(imageDecisions, article.url);
@@ -229,7 +230,6 @@ export default class NoospherePlugin extends Plugin {
     let historyVisible = false;
     let selectedImage: ImageDecision | undefined;
     let persistDraft: (delayMs?: number) => void = () => undefined;
-    const activeDocumentId = getActiveEditor()?.protyle?.block?.rootID;
     const createDialog = (): Dialog => new Dialog({
       title: "知流",
       width: `${Math.min(1360, window.innerWidth - 32)}px`,
@@ -302,7 +302,7 @@ export default class NoospherePlugin extends Plugin {
       const wrapper = input.closest<HTMLElement>(".noosphere__secret")!;
       wrapper.classList.toggle("has-value", Boolean(input.value));
     };
-    target.value = draft?.targetDocumentId ?? this.settings.targetDocumentId;
+    target.value = draft?.targetDocumentId || "";
     inputUrl.value = draft?.url || "";
     markdown.value = draft?.markdown || "";
     for (const name of ["firecrawlKey", "modelBaseUrl", "modelKey", "modelName"] as const) {
@@ -324,6 +324,11 @@ export default class NoospherePlugin extends Plugin {
     let perspectiveTab: "prompt" | "template" = "prompt";
 
     const role = (name: string): HTMLElement => root.querySelector<HTMLElement>(`[data-role="${name}"]`)!;
+    /** 已保存位置描述实际导入记录，正文改动或另选位置时仍可打开原文档。 */
+    const renderSavedLocation = (): void => {
+      saved.hidden = !article || !savedDocumentId;
+      saved.querySelector("span")!.textContent = `${savedContentChanged ? "此前已保存到" : "已保存到"} · ${savedDocumentId}`;
+    };
     /** 来源与正文各自排版，正文滚动不会带走右侧保存按钮。 */
     const renderArticle = (): void => {
       if (dialogClosed) return;
@@ -381,14 +386,14 @@ export default class NoospherePlugin extends Plugin {
       role("reviewInfo").hidden = !role("reviewInfo").textContent;
     };
     const snapshotDraft = (): CaptureDraft => ({ version: 1, updatedAt: Date.now(), url: inputUrl.value, article, markdown: markdown.value,
-      reviewedMarkdown, imageDecisions, targetDocumentId: target.value, perspective: workPerspective.value, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value), savedDocumentId, reviewInfo, textReviewed, historyId, bodyEdited,
+      reviewedMarkdown, imageDecisions, targetDocumentId: target.value, perspective: workPerspective.value, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value), savedDocumentId, savedContentChanged, reviewInfo, textReviewed, historyId, bodyEdited,
       editorState: editorState?.markdown === markdown.value ? editorState : undefined });
     /** 旧版本对重复图片的判断统一后，同步显示正文，保留人工编辑的原生格式。 */
     const repairImageChoices = (previous: ImageDecision[]): boolean => {
       if (!imageDecisions.some(item => item.remove && !previous.find(old => old.full === item.full)?.remove)) return false;
       markdown.value = applyImageDecisions(reviewedMarkdown || markdown.value, imageDecisions);
       if (editorState) editorState = applyEditorImageChoices(editorState, markdown.value, imageDecisions);
-      savedDocumentId = ""; saved.hidden = true;
+      savedContentChanged = !!savedDocumentId; renderSavedLocation();
       return true;
     };
     persistDraft = (delayMs = 250): void => {
@@ -399,9 +404,11 @@ export default class NoospherePlugin extends Plugin {
       if (historyVisible) renderHistory();
     };
     const markUnsaved = (): void => {
-      savedDocumentId = "";
-      saved.hidden = true;
+      savedContentChanged = !!savedDocumentId;
+      renderSavedLocation();
     };
+    /** 选择保存位置不改变既有导入记录；同一内容已经保存到当前目标时禁止重复追加。 */
+    const savedToTarget = (): boolean => !!savedDocumentId && !savedContentChanged && savedDocumentId === target.value.trim();
 
     /** 原生正文变更立即进入恢复缓存；来源和抓取原文独立保留。 */
     const acceptArticleEdit = (state: ArticleEditorState, title: string): void => {
@@ -487,13 +494,13 @@ export default class NoospherePlugin extends Plugin {
       action("review").textContent = reviewing ? "审阅中…" : "AI 审阅";
       action("cancelReview").hidden = !reviewing;
       action("cancelReview").disabled = !reviewing || !!reviewController?.signal.aborted;
-      action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim() || !target.value.trim() || !!savedDocumentId;
-      action("toggleImage").disabled = busy || bodyEditing || !!savedDocumentId;
-      for (const name of ["current", "settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab"] as const) action(name).disabled = busy;
+      action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim() || !target.value.trim() || savedToTarget();
+      action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
+      for (const name of ["settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       root.querySelectorAll<HTMLButtonElement>("[data-select-trigger], [data-select-option], [data-reveal]").forEach(button => { button.disabled = busy; });
-      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || (!!savedDocumentId && !!input.closest(".noosphere__asset")); });
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || (savedToTarget() && !!input.closest(".noosphere__asset")); });
       for (const sourceField of [sourceAuthor, sourcePublished]) { sourceField.disabled = busy || !article || !sourceEditing; sourceField.hidden = !sourceEditing; }
       role("sourceAuthorText").hidden = sourceEditing; role("sourcePublishedText").hidden = sourceEditing;
       action("editSource").hidden = sourceEditing; action("confirmSource").hidden = !sourceEditing;
@@ -534,11 +541,11 @@ export default class NoospherePlugin extends Plugin {
       imageDecisions = normalizeImageDecisions(restored.imageDecisions, article!.url);
       reviewInfo = restored.reviewInfo;
       textReviewed = restored.textReviewed ?? (!!reviewInfo || !!reviewedMarkdown);
-      target.value = restored.targetDocumentId || this.settings.targetDocumentId;
+      target.value = restored.targetDocumentId;
       savedDocumentId = restored.savedDocumentId;
+      savedContentChanged = restored.savedContentChanged || false;
       repairImageChoices(restored.imageDecisions);
-      saved.hidden = !savedDocumentId;
-      saved.querySelector("span")!.textContent = `已保存 · ${savedDocumentId}`;
+      renderSavedLocation();
       const perspective = restored.perspective === "raw" || REVIEW_PERSPECTIVES[restored.perspective as keyof typeof REVIEW_PERSPECTIVES]
         || customPerspectives.some(item => item.id === restored.perspective) ? restored.perspective : "original";
       setDropdown("workPerspective", perspective, false);
@@ -589,7 +596,7 @@ export default class NoospherePlugin extends Plugin {
                 if (historyId === entry.id) {
                   article = null; historyId = undefined; markdown.value = ""; reviewedMarkdown = "";
                   imageDecisions = []; reviewInfo = undefined; textReviewed = false; inputUrl.value = "";
-                  selectedImage = undefined; markUnsaved(); progressPanel.hidden = true;
+                  selectedImage = undefined; target.value = ""; savedDocumentId = ""; savedContentChanged = false; markUnsaved(); progressPanel.hidden = true;
                   persistDraft(); renderArticle(); renderImageDecisions(); renderSelectedImage();
                 }
                 renderHistory(); updateActions();
@@ -633,7 +640,7 @@ export default class NoospherePlugin extends Plugin {
       action("toggleImage").textContent = selectedImage.remove ? "恢复图片" : "移除图片";
     };
     const changeImageChoice = (decision: ImageDecision, remove: boolean): void => {
-      if (busy || bodyEditing || savedDocumentId) return;
+      if (busy || bodyEditing || savedToTarget()) return;
       reviewedMarkdown ||= markdown.value;
       decision.remove = remove;
       markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
@@ -689,7 +696,7 @@ export default class NoospherePlugin extends Plugin {
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = decision.remove;
-        checkbox.disabled = busy || bodyEditing || !!savedDocumentId;
+        checkbox.disabled = busy || bodyEditing || savedToTarget();
         checkbox.setAttribute("aria-label", `移除图片 ${index + 1}`);
         checkbox.addEventListener("change", () => changeImageChoice(decision, checkbox.checked));
         choice.append(checkbox);
@@ -737,7 +744,7 @@ export default class NoospherePlugin extends Plugin {
         imageProvider: imageProvider.value as Settings["imageProvider"],
         imageReview: !!imageProvider.value,
         customPerspectives: customPerspectives.map(item => ({ ...item, sections: undefined })),
-        targetDocumentId: target.value.trim(),
+        targetDocumentId: "",
       };
     };
     const cloneSettings = (value: Settings): Settings => JSON.parse(JSON.stringify(value)) as Settings;
@@ -759,9 +766,9 @@ export default class NoospherePlugin extends Plugin {
       article = state.article; markdown.value = state.markdown; reviewedMarkdown = state.reviewedMarkdown;
       imageDecisions = state.imageDecisions; reviewInfo = state.reviewInfo; textReviewed = state.textReviewed ?? (!!reviewInfo || !!reviewedMarkdown);
       editorState = state.editorState; bodyEdited = state.bodyEdited || false;
-      savedDocumentId = state.savedDocumentId === target.value.trim() ? state.savedDocumentId : "";
-      saved.hidden = !savedDocumentId;
-      saved.querySelector("span")!.textContent = `已保存 · ${savedDocumentId}`;
+      savedDocumentId = state.savedDocumentId;
+      savedContentChanged = state.savedContentChanged || false;
+      renderSavedLocation();
       streamingMarkdown = ""; selectedImage = undefined;
       renderArticle(); renderImageDecisions(); renderSelectedImage();
     };
@@ -780,7 +787,7 @@ export default class NoospherePlugin extends Plugin {
       if (busy) return;
       busy = true;
       reviewing = label === "AI 审阅";
-      const beforeReview: ReviewSnapshot | undefined = reviewing && article ? structuredClone({ article, markdown: markdown.value, reviewedMarkdown, imageDecisions, reviewInfo, textReviewed, savedDocumentId, editorState, bodyEdited }) : undefined;
+      const beforeReview: ReviewSnapshot | undefined = reviewing && article ? structuredClone({ article, markdown: markdown.value, reviewedMarkdown, imageDecisions, reviewInfo, textReviewed, savedDocumentId, savedContentChanged, editorState, bodyEdited }) : undefined;
       const controller = reviewing ? new AbortController() : undefined;
       reviewController = controller;
       let removeAbortListener: (() => void) | undefined;
@@ -1217,7 +1224,7 @@ export default class NoospherePlugin extends Plugin {
       sourceEditing = true; updateActions(); sourceAuthor.focus();
     });
     action("confirmSource").addEventListener("click", updateSourceMetadata);
-    target.addEventListener("input", () => { markUnsaved(); persistDraft(); updateActions(); });
+    target.addEventListener("input", () => { persistDraft(); updateActions(); renderImageDecisions(); });
     action("toggleSettings").addEventListener("click", () => {
       if (setup.hidden) {
         setupBaseline = cloneSettings(readSettings());
@@ -1249,12 +1256,6 @@ export default class NoospherePlugin extends Plugin {
         }
       })();
     });
-    action("current").addEventListener("click", () => {
-      if (activeDocumentId) { target.value = activeDocumentId; setStatus("已选择当前文档。", "success"); }
-      else showMessage("没有找到当前打开的文档，请填写文档 ID。", 7000, "error");
-      if (activeDocumentId) { markUnsaved(); persistDraft(); }
-      updateActions();
-    });
     action("scrape").addEventListener("click", () => {
       void run("抓取", async () => {
         const settings = await saveSettings();
@@ -1263,6 +1264,7 @@ export default class NoospherePlugin extends Plugin {
         if (this.uninstalled) throw new Error("知流已卸载");
         progressPanel.hidden = true;
         article = nextArticle; editorState = undefined; bodyEdited = false;
+        target.value = ""; savedDocumentId = ""; savedContentChanged = false;
         reviewedMarkdown = "";
         imageDecisions = [];
         reviewInfo = undefined;
@@ -1409,9 +1411,10 @@ export default class NoospherePlugin extends Plugin {
     });
     action("save").addEventListener("click", () => {
       void run("保存", async () => {
-        const settings = await saveSettings();
+        const documentId = target.value.trim();
+        await saveSettings();
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
-        await validateTargetDocument(settings.targetDocumentId);
+        await validateTargetDocument(documentId);
         if (this.uninstalled) throw new Error("知流已卸载");
         let content = markdown.value;
         let note = "";
@@ -1432,10 +1435,9 @@ export default class NoospherePlugin extends Plugin {
           note += `，${result.warnings.length} 张保留原链接`;
           showMessage(`${result.warnings.length} 张图片未能保存到思源，正文仍保留原链接。${result.warnings[0]}`, 7000, "error");
         }
-        await appendArticle(settings.targetDocumentId, article, content, editorState?.blockDOM);
-        savedDocumentId = settings.targetDocumentId;
-        saved.querySelector("span")!.textContent = `已保存 · ${savedDocumentId}`;
-        saved.hidden = false;
+        await appendArticle(documentId, article, content, editorState?.blockDOM);
+        savedDocumentId = documentId; savedContentChanged = false;
+        renderSavedLocation();
         persistDraft();
         return `已保存到思源${note}。点击“打开文档”查看。`;
       });
@@ -1451,12 +1453,7 @@ export default class NoospherePlugin extends Plugin {
     renderArticle();
     renderImageDecisions();
     role("historyCount").textContent = String(this.historyStore.entries.length);
-    if (article) {
-      if (savedDocumentId) {
-        saved.querySelector("span")!.textContent = `已保存 · ${savedDocumentId}`;
-        saved.hidden = false;
-      }
-    }
+    renderSavedLocation();
     showView(this.settings.firecrawlKey ? "workbench" : "setup");
     updateActions();
   }
