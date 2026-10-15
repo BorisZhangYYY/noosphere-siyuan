@@ -21,7 +21,7 @@ Requires **SiYuan 3.8.6 or later**. The declared environments are Windows, macOS
 
 ## Quick start
 
-![ZhiLiu workbench: capture at the top, article editing on the left, AI review and images on the right, and the save destination at the bottom right](images/workbench.png)
+![ZhiLiu workbench: capture at the top, article editing on the left, AI review and images on the right, and the save destination at the bottom right](https://raw.githubusercontent.com/BorisZhangYYY/noosphere-siyuan/main/.docs/images/workbench.png)
 
 Capture new articles at the top, read and edit the body on the left, and review with AI or manage images on the right. The save destination stays at the bottom right. Use Settings in the top-right corner to configure services.
 
