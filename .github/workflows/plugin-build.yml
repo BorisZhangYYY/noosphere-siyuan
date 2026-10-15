@@ -21,6 +21,16 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run package
+      - name: Validate syncable archive paths
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, zipfile
+          with zipfile.ZipFile("package.zip") as package:
+              assert not any(part.startswith(".") for name in package.namelist() for part in pathlib.PurePosixPath(name).parts), "Hidden archive entries are ignored by SiYuan sync"
+              manifest = json.loads(package.read("plugin.json"))
+              for path in manifest["readme"].values():
+                  assert path in package.namelist(), f"Declared README is missing: {path}"
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: noosphere-siyuan-plugin
@@ -52,7 +62,7 @@ jobs:
           with zipfile.ZipFile(archive) as package:
               assert package.testzip() is None, "Installation ZIP is damaged"
               assert json.loads(package.read("plugin.json"))["version"] == version
-              assert {"index.js", "index.css", "plugin.json", "README.md", "CONTRIBUTING.md", ".project/development.md", ".docs/images/workbench.png"} <= set(package.namelist())
+              assert {"index.js", "index.css", "plugin.json", "README.md", "CONTRIBUTING.md", "project/development.md", "docs/images/workbench.png"} <= set(package.namelist())
               manifest = json.loads(package.read("plugin.json"))
               assert "LICENSE" in package.namelist(), "Plugin license is missing"
               for path in manifest["readme"].values():

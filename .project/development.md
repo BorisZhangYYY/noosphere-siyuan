@@ -20,6 +20,8 @@ npm run package
 
 `npm run build` 先进行类型检查，再生成 `dist/`。`npm run package` 在构建后生成 `package.zip`，其中直接包含插件文件，没有额外的顶层文件夹。
 
+仓库中的 `.docs/`、`.project/` 在安装包中分别映射为 `docs/`、`project/`，Markdown 链接同时转换。安装包不包含点开头的路径，确保文档与截图参与思源同步。
+
 本地调试时，将 `dist/` 内容复制到测试工作空间的 `data/plugins/noosphere-siyuan/`，再启用插件或重新加载思源界面。服务配置在知流“设置”中填写。
 
 ## 项目结构
