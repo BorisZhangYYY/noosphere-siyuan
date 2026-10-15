@@ -40,6 +40,37 @@ it("cancels all vision workers without marking images failed or starting more re
 });
 
 describe("image review", () => {
+  it("shares one decision across WeChat dimensions, tracking parameters and protocols", async () => {
+    const requests = mockReview("PROMOTION");
+    const source = { ...article, markdown: "![头像](http://mmbiz.qpic.cn/sz_mmbiz_png/asset/300?wx_fmt=png&wxfrom=19)\n![头像](http://mmbiz.qpic.cn/sz_mmbiz_png/asset/0?wx_fmt=png)\n![头像](https://mmbiz.qpic.cn/sz_mmbiz_png/asset/0?wx_fmt=png)" };
+    const result = await reviewImages(source, "摘要", settings);
+    expect(requests).toHaveLength(2); expect(result.decisions).toHaveLength(3);
+    expect(result.decisions.every(item => item.remove && item.status === "reviewed")).toBe(true);
+    expect(applyImageDecisions(source.markdown, result.decisions).trim()).toBe("");
+  });
+
+  it("repairs contradictory legacy duplicate suggestions and preserves explicit user choices", () => {
+    const inventory = imageInventory("![头像](http://mmbiz.qpic.cn/mmbiz_png/asset/300)\n![头像](https://mmbiz.qpic.cn/mmbiz_png/asset/0)", article.url);
+    const previous = inventory.map((item, i) => ({ ...item, status: "reviewed" as const, description: i ? "相关" : "装饰头像", recommendedRemove: !i, remove: !i }));
+    const repaired = normalizeImageDecisions(previous, article.url);
+    expect(repaired[1]).toMatchObject({ remove: true, recommendedRemove: true, description: "装饰头像" });
+    expect(normalizeImageDecisions([{ ...previous[0], remove: false }, previous[1]], article.url)[0].remove).toBe(false);
+  });
+
+  it.each([true, false])("retries incomplete image responses once, with recovery=%s", async recover => {
+    let attempts = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_path, options: RequestInit) => {
+      const request = JSON.parse(options.body as string);
+      const response = request.method === "GET" ? { status: 200, body: "aGVsbG8=", contentType: "image/png" }
+        : { status: 200, body: JSON.stringify({ choices: [{ message: { content: ++attempts === 2 && recover
+          ? '{"classification":"PROMOTION","description":"互动图"}' : '{"classification":' } }] }) };
+      return { ok: true, json: async () => ({ code: 0, data: response }) };
+    }));
+    const result = await reviewImages(article, "摘要", settings);
+    expect(fetch).toHaveBeenCalledTimes(3); expect(attempts).toBe(2);
+    expect(result.decisions[0]).toMatchObject({ status: recover ? "reviewed" : "failed", remove: recover });
+    if (!recover) expect(result.decisions[0].error).toBe("图片模型返回不完整或无效的识别结果，重试后仍未完成");
+  });
   it("does not download the article page when a scraper mistakes it for an image", async () => {
     const requests = mockReview("RELEVANT");
     const source = { ...article, markdown: `![](${article.url})\n![](#article)\n${article.markdown}\n[来源](${article.url})` };

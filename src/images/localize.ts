@@ -11,6 +11,14 @@ export interface LocalizationResult {
 
 const IMAGE_PATTERN = /!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g;
 
+/** 同步其他保留稿中的已下载图片，不再次发起网络请求。 */
+export function replaceImageAssetRefs(markdown: string, assets: Record<string, string>): string {
+  return markdown.replace(IMAGE_PATTERN, (full, alt: string, raw: string) => {
+    const local = assets[raw.replace(/^<|>$/g, "")];
+    return local ? `![${alt}](${local})` : full;
+  });
+}
+
 function fileExtension(contentType: string): string {
   const type = contentType.split(";")[0].trim().toLowerCase();
   const extensions: Record<string, string> = {
@@ -61,9 +69,6 @@ export async function localizeMarkdownImages(markdown: string, articleUrl: strin
       warnings.push(`图片 ${original}：${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  const output = markdown.replace(IMAGE_PATTERN, (full, alt: string, raw: string) => {
-    const original = raw.replace(/^<|>$/g, "");
-    return replacements.has(original) ? `![${alt}](${replacements.get(original)})` : full;
-  });
+  const output = replaceImageAssetRefs(markdown, Object.fromEntries(replacements));
   return { markdown: output, localized, warnings, assets: Object.fromEntries(replacements) };
 }

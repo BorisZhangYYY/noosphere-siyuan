@@ -2,7 +2,7 @@
 import { proxyRequest, throwIfCancelled } from "../siyuan/api";
 import type { Article, Settings } from "../types";
 import { modelEndpoint } from "./endpoint";
-import { isArticleImagePlaceholder, localAssetPath, resolveImageReference } from "../images/reference";
+import { imageIdentity, isArticleImagePlaceholder, localAssetPath, resolveImageReference } from "../images/reference";
 import { conciseRequestError } from "../siyuan/errors";
 
 const IMAGE = /!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g;
@@ -29,11 +29,20 @@ export function imageInventory(markdown: string, articleUrl: string): ImageDecis
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */
 export function normalizeImageDecisions(decisions: ImageDecision[], articleUrl: string): ImageDecision[] {
-  return decisions.filter(item => !isArticleImagePlaceholder(item.url, articleUrl)).map(item => {
+  const normalized = decisions.filter(item => !isArticleImagePlaceholder(item.url, articleUrl)).map(item => {
     const ref = refs(item.full, articleUrl)[0];
     const normalized = ref ? { ...item, url: ref.url } : { ...item };
     if (normalized.error) normalized.error = conciseRequestError(normalized.error);
     return normalized;
+  });
+  // 修复旧草稿对同一微信配图的矛盾建议；用户主动改变过的取舍继续保留。
+  const promotions = new Map(normalized.filter(item => imageDecisionStatus(item) === "reviewed" && item.recommendedRemove)
+    .map(item => [imageIdentity(item.url), item]));
+  return normalized.map(item => {
+    const shared = promotions.get(imageIdentity(item.url));
+    if (!shared || item.recommendedRemove || item.remove !== item.recommendedRemove) return item;
+    const { error: _error, ...rest } = item;
+    return { ...rest, description: shared.description, recommendedRemove: true, remove: true, status: "reviewed" as const };
   });
 }
 
@@ -98,7 +107,7 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
   let payload: object;
   if (settings.modelFormat === "anthropic") {
     endpoint = modelEndpoint(settings.modelBaseUrl, "/messages", settings.modelFormat);
-    payload = { model: settings.modelName.trim(), max_tokens: 256, system: PROMPT, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: mime, data: base64 } }, { type: "text", text: context }] }] };
+    payload = { model: settings.modelName.trim(), max_tokens: 1024, system: PROMPT, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: mime, data: base64 } }, { type: "text", text: context }] }] };
   } else if (settings.modelFormat === "openai_responses") {
     endpoint = modelEndpoint(settings.modelBaseUrl, "/responses", settings.modelFormat);
     payload = { model: settings.modelName.trim(), instructions: PROMPT, input: [{ role: "user", content: [{ type: "input_text", text: context }, { type: "input_image", image_url: `data:${mime};base64,${base64}`, detail: "low" }] }] };
@@ -112,14 +121,23 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
   const headers: Record<string, string> = settings.modelFormat === "anthropic"
     ? { "x-api-key": settings.modelKey.trim(), "anthropic-version": "2023-06-01" }
     : settings.modelFormat === "google" ? { "x-goog-api-key": settings.modelKey.trim() } : { Authorization: `Bearer ${settings.modelKey.trim()}` };
-  let response: Awaited<ReturnType<typeof proxyRequest>>;
-  try { response = await proxyRequest(endpoint, "POST", headers, payload, "text", IMAGE_REVIEW_TIMEOUT_MS, signal); }
-  catch (error) { throwIfCancelled(signal); throw new Error(`图片模型请求失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
-  throwIfCancelled(signal);
-  const text = responseText(response.body, settings.modelFormat).trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
-  const parsed = JSON.parse(text) as { classification?: string; description?: string };
-  if (parsed.classification !== "RELEVANT" && parsed.classification !== "PROMOTION") throw new Error("模型未给出明确的图片判断");
-  return { classification: parsed.classification, description: typeof parsed.description === "string" ? parsed.description.slice(0, 200) : "" };
+  // 下载只执行一次；模型的空白、截断或非 JSON 回答最多重试一次，取消立即生效。
+  for (let attempt = 0; attempt < 2; attempt++) {
+    throwIfCancelled(signal);
+    let response: Awaited<ReturnType<typeof proxyRequest>>;
+    try { response = await proxyRequest(endpoint, "POST", headers, payload, "text", IMAGE_REVIEW_TIMEOUT_MS, signal); }
+    catch (error) { throwIfCancelled(signal); throw new Error(`图片模型请求失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
+    throwIfCancelled(signal);
+    try {
+      const text = responseText(response.body, settings.modelFormat).trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
+      const parsed = JSON.parse(text) as { classification?: string; description?: string };
+      if (parsed?.classification !== "RELEVANT" && parsed?.classification !== "PROMOTION") throw new Error("缺少图片判断");
+      return { classification: parsed.classification, description: typeof parsed.description === "string" ? parsed.description.slice(0, 200) : "" };
+    } catch {
+      if (attempt === 1) throw new Error("图片模型返回不完整或无效的识别结果，重试后仍未完成");
+    }
+  }
+  throw new Error("图片识别未完成");
 }
 
 /** Suggest removals after text review; keep full Markdown until the user decides. */
@@ -130,9 +148,10 @@ export async function reviewImages(article: Article, summary: string, settings: 
   // 同一次审阅覆盖全部图片；相同地址的多个引用共享本次识别结果。
   const byUrl = new Map<string, Array<{ ref: ImageRef; index: number }>>();
   images.forEach((ref, index) => {
-    const group = byUrl.get(ref.url) || [];
+    const identity = imageIdentity(ref.url);
+    const group = byUrl.get(identity) || [];
     group.push({ ref, index });
-    byUrl.set(ref.url, group);
+    byUrl.set(identity, group);
   });
   const groups = Array.from(byUrl.values());
   const warnings: string[] = [];

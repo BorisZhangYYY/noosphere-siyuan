@@ -5,7 +5,7 @@ import { localAssetPath, stripArticleImagePlaceholders } from "../images/referen
 import { composeArticle } from "./compose";
 import type { Article } from "../types";
 
-export type MarkdownRenderer = Pick<Lute, "ProtylePreviewStr">;
+export type MarkdownRenderer = Pick<Lute, "ProtylePreviewStr"> & { native?: boolean };
 
 /** 相对路径以文章为基准，思源本地资源始终由当前工作空间提供。 */
 export function previewUrl(raw: string, articleUrl: string, image = false): string | null {
@@ -25,10 +25,11 @@ export function previewUrl(raw: string, articleUrl: string, image = false): stri
 export function renderArticlePreview(element: HTMLElement, markdown: string, articleUrl: string, renderer: MarkdownRenderer, preserveNodes = false): void {
   const content = preserveNodes ? document.createElement("div") : element;
   content.innerHTML = DOMPurify.sanitize(renderer.ProtylePreviewStr("noosphere-article", stripArticleImagePlaceholders(markdown, articleUrl)), {
-    USE_PROFILES: { html: true },
+    USE_PROFILES: { html: true, ...(renderer.native ? { svg: true } : {}) },
     FORBID_TAGS: ["style", "iframe", "object", "embed", "form", "video", "audio"],
-    FORBID_ATTR: ["style", "srcset"],
+    FORBID_ATTR: renderer.native ? ["srcset"] : ["style", "srcset"],
   });
+  content.querySelectorAll("[contenteditable]").forEach(node => node.setAttribute("contenteditable", "false"));
   content.querySelectorAll<HTMLAnchorElement>("a[href]").forEach(link => {
     const url = previewUrl(link.getAttribute("href") || "", articleUrl);
     if (!url) { link.removeAttribute("href"); return; }
@@ -160,6 +161,7 @@ export function reviewPreviewText(markdown: string, articleUrl: string, renderer
 
 /** 每批内容更新排版一次；每帧沿用段落、链接和图片节点，避免长文反复净化、测量和加载图片。 */
 export function renderStreamingArticlePreview(element: HTMLElement, article: Article, title: string, markdown: string, renderer: MarkdownRenderer, count: number): void {
+  element.classList.toggle("is-native", !!renderer.native);
   let scene = streamScenes.get(element);
   if (!scene || scene.body.parentNode !== element) {
     const imageSizes = new Map<string, { width: number; height: number }>();
@@ -167,7 +169,8 @@ export function renderStreamingArticlePreview(element: HTMLElement, article: Art
       if (image.naturalWidth && image.naturalHeight) imageSizes.set(image.src, { width: image.naturalWidth, height: image.naturalHeight });
     });
     const prefix = document.createElement("div"), body = document.createElement("div");
-    prefix.className = "noosphere__stream-prefix"; body.className = "noosphere__stream-body";
+    prefix.className = `noosphere__stream-prefix${renderer.native ? " protyle-wysiwyg" : ""}`;
+    body.className = `noosphere__stream-body${renderer.native ? " protyle-wysiwyg" : ""}`;
     element.replaceChildren(prefix, body);
     scene = { prefix, body, imageSizes, boundImages: new WeakSet(), prefixMarkdown: "", slots: [] }; streamScenes.set(element, scene);
   }

@@ -27,13 +27,20 @@ export interface CaptureDraft {
   perspective: string;
   outputLanguage?: import("../review/language").OutputLanguage;
   savedDocumentId: string;
+  /** 已导入的文档独立于本次选择；正文变化后允许再次保存，仍能打开此前导入的文档。 */
+  savedContentChanged?: boolean;
   reviewInfo?: { summary: string; completedAt: string; model: string; perspective: string };
   textReviewed?: boolean;
   historyId?: string;
+  /** 原生编辑的块结构与 Markdown 一起保存，颜色、块属性和引用不会因恢复而丢失。 */
+  editorState?: ArticleEditorState;
+  bodyEdited?: boolean;
 }
 
+export interface ArticleEditorState { markdown: string; nativeMarkdown: string; blockDOM: string; fullBlockDOM?: string }
+
 /** 本次审阅开始前的临时快照，仅供进行中取消时恢复，不随草稿保存。 */
-export type ReviewSnapshot = Pick<CaptureDraft, "article" | "markdown" | "reviewedMarkdown" | "imageDecisions" | "reviewInfo" | "textReviewed" | "savedDocumentId">;
+export type ReviewSnapshot = Pick<CaptureDraft, "article" | "markdown" | "reviewedMarkdown" | "imageDecisions" | "reviewInfo" | "textReviewed" | "savedDocumentId" | "savedContentChanged" | "editorState" | "bodyEdited">;
 
 /** 忽略损坏或不兼容的文件，避免恢复过程阻止工作台打开。 */
 export function validDraft(value: unknown): value is CaptureDraft {
@@ -45,6 +52,10 @@ export function validDraft(value: unknown): value is CaptureDraft {
     && (!draft.reviewInfo || [draft.reviewInfo.summary, draft.reviewInfo.completedAt, draft.reviewInfo.model, draft.reviewInfo.perspective].every(item => typeof item === "string"))
     && (draft.textReviewed === undefined || typeof draft.textReviewed === "boolean")
     && (draft.historyId === undefined || typeof draft.historyId === "string")
+    && (draft.bodyEdited === undefined || typeof draft.bodyEdited === "boolean")
+    && (draft.savedContentChanged === undefined || typeof draft.savedContentChanged === "boolean")
+    && (!draft.editorState || [draft.editorState.markdown, draft.editorState.nativeMarkdown, draft.editorState.blockDOM].every(item => typeof item === "string"))
+    && (!draft.editorState || draft.editorState.fullBlockDOM === undefined || typeof draft.editorState.fullBlockDOM === "string")
     && (draft.outputLanguage === undefined || ["follow_ui", "source", "zh-CN", "en-US"].includes(draft.outputLanguage))
     && draft.imageDecisions.every(item => item && [item.full, item.alt, item.url, item.description].every(text => typeof text === "string") && typeof item.remove === "boolean" && typeof item.recommendedRemove === "boolean")
     && (draft.article === null || (!!draft.article && [draft.article.url, draft.article.title, draft.article.markdown].every(item => typeof item === "string")));
