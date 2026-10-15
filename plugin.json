@@ -24,7 +24,7 @@
     "zh-CN": "网页采集、可选 AI 审阅与原生编辑，保存正文、来源和图片到思源笔记"
   },
   "readme": {
-    "default": ".docs/README.en.md",
+    "default": "docs/README.en.md",
     "zh-CN": "README.md"
   },
   "keywords": [
