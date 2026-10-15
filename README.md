@@ -15,7 +15,7 @@
 
 ## 开始使用
 
-![知流工作台：顶部抓取链接、左侧正文编辑、右侧 AI 审阅与素材、右下保存位置](.docs/images/workbench.png)
+![知流工作台：顶部抓取链接、左侧正文编辑、右侧 AI 审阅与素材、右下保存位置](https://raw.githubusercontent.com/BorisZhangYYY/noosphere-siyuan/main/.docs/images/workbench.png)
 
 上方用于抓取新文章，左侧阅读与编辑正文，右侧进行 AI 审阅和配图取舍，保存位置固定在右下方。点击右上角“设置”配置服务。
 
