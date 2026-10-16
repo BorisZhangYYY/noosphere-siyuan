@@ -78,6 +78,19 @@ export function presetProfile(id: ProviderId): ModelProfile {
   return { modelFormat, modelBaseUrl, modelKey, modelName, modelVisionCapable };
 }
 
+/** 忽略浏览时生成的空白预设，并统一字段与顺序，避免误报未保存。 */
+export function configuredProfiles(profiles: Settings["modelProfiles"]): Settings["modelProfiles"] {
+  const result: Settings["modelProfiles"] = {};
+  for (const id of (Object.keys(profiles) as ProviderId[]).sort()) {
+    const profile = profiles[id];
+    if (!profile) continue;
+    const preset = presetProfile(id);
+    const normalized: ModelProfile = { modelFormat: profile.modelFormat, modelBaseUrl: profile.modelBaseUrl, modelKey: profile.modelKey, modelName: profile.modelName, modelVisionCapable: profile.modelVisionCapable };
+    if (JSON.stringify(normalized) !== JSON.stringify(preset)) result[id] = normalized;
+  }
+  return result;
+}
+
 export function inferProvider(baseUrl: string): ProviderId {
   const value = baseUrl.toLowerCase();
   if (value.includes("api.kimi.com/coding")) return "kimi_code";

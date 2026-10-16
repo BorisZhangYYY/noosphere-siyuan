@@ -6,7 +6,6 @@ const formatOptions = [
   ["google", "Google · Gemini"],
 ] as const;
 const perspectiveOptions = [
-  ["raw", "原文"],
   ["original", "基于原文"],
   ["novice", "小白视角"],
 ] as const;
@@ -29,7 +28,7 @@ function secret(name: string, placeholder = ""): string {
 export function captureContent(): string {
   return `<div class="noosphere">
     <main class="noosphere__setup" data-view="setup" hidden>
-      <div class="noosphere__page-heading"><h2>设置</h2></div>
+      <div class="noosphere__page-heading"><h2>设置</h2><div class="noosphere__settings-actions"><span data-role="settingsState" role="status" aria-live="polite"></span><button data-action="settings" class="b3-button noosphere__primary" type="button">保存</button></div></div>
       <section class="noosphere__panel"><div class="noosphere__panel-title"><h3>抓取服务</h3><span>必填</span></div>
         <label>Firecrawl API Key${secret("firecrawlKey", "fc-...")}</label>
         <p class="noosphere__field-help">还没有密钥？前往 <a href="https://www.firecrawl.dev/app/api-keys" target="_blank" rel="noopener noreferrer">Firecrawl API Keys</a> 注册、创建并复制密钥。</p>
@@ -53,13 +52,13 @@ export function captureContent(): string {
         <div class="noosphere__image-provider">${dropdown("imageProvider", "图片审阅模型", [["", "关闭图片审阅"]])}<p>可从已标记“支持识图”的供应商中选择；与文字审阅模型可以不同。识别失败的图片会保留。</p></div>
         <section class="noosphere__perspective-editor"><div class="noosphere__perspective-heading"><div><h4>审阅视角与文章格式</h4><p>新增视角后，像给编辑提要求一样描述文章结构。</p></div><div class="noosphere__perspective-buttons"><button data-action="addPerspective" class="b3-button b3-button--outline" type="button">新增视角</button><button data-action="deletePerspective" class="b3-button b3-button--outline" type="button" hidden>删除视角</button></div></div>
           ${dropdown("reviewPerspective", "", perspectiveOptions)}
+          <p class="noosphere__perspective-notice" data-role="builtinPerspectiveHint">“基于原文”和“小白视角”为内置视角，只读且不可删除。如需调整，请新增自定义视角。</p>
           <div class="noosphere__perspective-meta" data-role="perspectiveMeta" hidden><label>视角名称<input data-field="perspectiveLabel" class="b3-text-field" maxlength="80"></label><label>描述<input data-field="perspectiveDescription" class="b3-text-field" maxlength="400"></label></div>
           <div class="noosphere__prompt-tabs"><button data-action="perspectiveTab" class="is-active" type="button">视角提示词</button><button data-action="templateTab" type="button">文章格式要求</button></div>
           <div data-role="perspectivePrompt"><textarea data-field="perspectiveEditor" class="b3-text-field noosphere__perspective-textarea" spellcheck="false" aria-label="视角提示词"></textarea></div>
           <div class="noosphere__format-editor" data-role="templateBuilder" hidden><textarea data-field="templateEditor" class="b3-text-field noosphere__perspective-textarea" spellcheck="false" aria-label="文章格式要求"></textarea></div>
         </section>
       </section>
-      <div class="noosphere__setup-footer"><button data-action="settings" class="b3-button noosphere__primary" type="button">保存并进入工作台</button></div>
     </main>
     <main class="noosphere__workbench" data-view="workbench" hidden>
       <nav class="noosphere__work-tabs" aria-label="工作台视图"><button data-action="showCapture" type="button" class="is-active" aria-pressed="true">当前文章</button><button data-action="showHistory" type="button" aria-pressed="false">历史记录 <span data-role="historyCount">0</span></button></nav>

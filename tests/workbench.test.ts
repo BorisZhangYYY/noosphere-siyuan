@@ -64,6 +64,7 @@ vi.mock("../src/article/editor", async importOriginal => ({
 import NoospherePlugin from "../src/index";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { reviewArticleDetailed } from "../src/review/provider";
+import { REVIEW_PERSPECTIVES } from "../src/review/perspectives";
 import { imageInventory } from "../src/review/images";
 import { localizeMarkdownImages } from "../src/images/localize";
 import { appendArticle } from "../src/siyuan/writer";
@@ -97,6 +98,127 @@ describe("workbench regression", () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ success: true, data: { markdown: article.markdown, metadata: { title: article.title } } }) } }) })));
   });
   afterEach(() => { fixtures.dialogs.at(-1)?.destroy(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
+
+  it("shows read-only builtin guidance for both perspectives and allows custom editing and deletion", async () => {
+    await launch(); click("toggleSettings");
+    const hint = document.querySelector<HTMLElement>('[data-role="builtinPerspectiveHint"]')!;
+    const prompt = document.querySelector<HTMLTextAreaElement>('[data-field="perspectiveEditor"]')!;
+    const format = document.querySelector<HTMLTextAreaElement>('[data-field="templateEditor"]')!;
+    for (const id of ["original", "novice"] as const) {
+      document.querySelector<HTMLButtonElement>(`[data-select-option="reviewPerspective"][data-value="${id}"]`)!.click();
+      expect(hint.hidden).toBe(false); expect(hint.textContent).toContain("只读且不可删除");
+      expect(prompt.readOnly).toBe(true); expect(format.readOnly).toBe(true);
+      expect(prompt.value).toBe(REVIEW_PERSPECTIVES[id].prompt);
+      expect(format.value).toBe(REVIEW_PERSPECTIVES[id].template);
+      expect(document.querySelector<HTMLElement>('[data-action="deletePerspective"]')!.hidden).toBe(true);
+      click("deletePerspective");
+      expect(document.querySelector<HTMLInputElement>('[data-field="reviewPerspective"]')!.value).toBe(id);
+      click("templateTab"); expect(document.querySelector<HTMLElement>('[data-role="templateBuilder"]')!.hidden).toBe(false);
+      click("perspectiveTab"); expect(document.querySelector<HTMLElement>('[data-role="perspectivePrompt"]')!.hidden).toBe(false);
+    }
+    click("addPerspective");
+    expect(hint.hidden).toBe(true); expect(prompt.readOnly).toBe(false); expect(format.readOnly).toBe(false);
+    expect(document.querySelector<HTMLElement>('[data-action="deletePerspective"]')!.hidden).toBe(false);
+    const id = document.querySelector<HTMLInputElement>('[data-field="reviewPerspective"]')!.value;
+    input("perspectiveEditor", "自定义审阅要求"); input("templateEditor", "自定义文章格式");
+    click("settings"); await ready();
+    expect((fixtures.files.get("settings.json") as typeof DEFAULT_SETTINGS).customPerspectives).toContainEqual(expect.objectContaining({ id, prompt:"自定义审阅要求", template:"自定义文章格式" }));
+    click("deletePerspective"); click("deletePerspective");
+    expect(document.querySelector(`[data-select-option="reviewPerspective"][data-value="${id}"]`)).toBeNull();
+    expect(hint.hidden).toBe(false);
+  });
+
+  it("removes the raw AI option and restores legacy draft and history choices without changing their content", async () => {
+    fixtures.files.set("settings.json", { ...fixtures.files.get("settings.json") as object, reviewPerspective:"raw" });
+    const content = "人工编辑并保留的正文";
+    fixtures.files.set(DRAFT_STORAGE_NAME, { version:1, updatedAt:Date.now(), article, url:article.url, markdown:content, reviewedMarkdown:"", bodyEdited:true, imageDecisions:[], targetDocumentId:"", perspective:"raw", savedDocumentId:"" });
+    await launch();
+    for (const name of ["reviewPerspective", "workPerspective"]) {
+      expect(Array.from(document.querySelectorAll<HTMLButtonElement>(`[data-select-option="${name}"]`), option => option.dataset.value)).toEqual(["original", "novice"]);
+      expect(document.querySelector<HTMLInputElement>(`[data-field="${name}"]`)!.value).toBe("original");
+    }
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toBe(content);
+    click("showHistory"); historyAction("view");
+    expect(document.querySelector<HTMLInputElement>('[data-field="workPerspective"]')!.value).toBe("original");
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toBe(content);
+    document.querySelector<HTMLButtonElement>('[data-select-option="workPerspective"][data-value="novice"]')!.click();
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toBe(content);
+    expect(reviewArticleDetailed).not.toHaveBeenCalled(); expect(fixtures.confirm).not.toHaveBeenCalled();
+  });
+
+  it("saves from the settings heading, stays in setup and returns without a discard warning", async () => {
+    await launch(); click("toggleSettings");
+    const setup = document.querySelector<HTMLElement>('[data-view="setup"]')!;
+    const state = document.querySelector('[data-role="settingsState"]')!;
+    expect(setup.querySelector('.noosphere__page-heading [data-action="settings"]')).not.toBeNull();
+    input("modelName", "updated-model");
+    await vi.waitFor(() => expect(state.textContent).toBe("未保存"));
+    click("settings"); await ready();
+    expect(setup.hidden).toBe(false);
+    expect(state.textContent).toBe("已保存");
+    expect((fixtures.files.get("settings.json") as typeof DEFAULT_SETTINGS).modelName).toBe("updated-model");
+    click("toggleSettings");
+    expect(fixtures.confirm).not.toHaveBeenCalled();
+    expect(setup.hidden).toBe(true);
+    click("toggleSettings"); input("modelName", "unsaved-model"); click("toggleSettings");
+    expect(fixtures.confirm).toHaveBeenCalledOnce();
+    fixtures.confirm.mock.calls[0][2](); click("toggleSettings");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelName"]')!.value).toBe("updated-model");
+  });
+
+  it("does not mark browsing blank presets or toggling key visibility as unsaved", async () => {
+    await launch(); click("toggleSettings");
+    const original = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    for (const id of ["volcengine", "openai", original]) document.querySelector<HTMLButtonElement>(`[data-provider-id="${id}"]`)!.click();
+    document.querySelector<HTMLButtonElement>('[data-reveal="modelKey"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-role="settingsState"]')!.textContent).toBe("已保存"));
+    click("toggleSettings");
+    expect(fixtures.confirm).not.toHaveBeenCalled();
+    expect(document.querySelector<HTMLElement>('[data-view="setup"]')!.hidden).toBe(true);
+  });
+
+  it("keeps new keys visible while typing and remembers each supplier's eye toggle", async () => {
+    await launch(); click("toggleSettings");
+    const key = document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!;
+    const original = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    const select = (id: string): void => document.querySelector<HTMLButtonElement>(`[data-provider-id="${id}"]`)!.click();
+    expect(key.type).toBe("password");
+    expect(document.querySelector<HTMLInputElement>('[data-field="firecrawlKey"]')!.type).toBe("password");
+    select("volcengine");
+    expect(key.value).toBe(""); expect(key.type).toBe("text");
+    input("modelKey", "a"); expect(key.type).toBe("text");
+    input("modelKey", "a-new-key"); expect(key.type).toBe("text");
+    select(original); expect(key.type).toBe("password");
+    select("volcengine"); expect(key.type).toBe("text"); expect(key.value).toBe("a-new-key");
+    document.querySelector<HTMLButtonElement>('[data-reveal="modelKey"]')!.click();
+    expect(key.type).toBe("password");
+    input("modelKey", "a-new-key-2"); expect(key.type).toBe("password");
+    select(original); select("volcengine"); expect(key.type).toBe("password");
+    input("modelKey", ""); expect(key.type).toBe("text");
+    input("modelKey", "replacement"); expect(key.type).toBe("text");
+    click("settings"); await ready();
+    fixtures.dialogs.at(-1)!.destroy(); await launch(); click("toggleSettings");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.type).toBe("password");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("replacement");
+  });
+
+  it("saves model configuration before Firecrawl is filled and leaves failed saves dirty", async () => {
+    fixtures.files.set("settings.json", { ...DEFAULT_SETTINGS });
+    const plugin = await launch();
+    const firecrawl = document.querySelector<HTMLInputElement>('[data-field="firecrawlKey"]')!;
+    expect(firecrawl.type).toBe("text");
+    input("modelKey", "test-new-key"); input("modelName", "test-new-model");
+    click("settings"); await ready();
+    expect((fixtures.files.get("settings.json") as typeof DEFAULT_SETTINGS).modelKey).toBe("test-new-key");
+    expect(document.querySelector('[data-role="settingsState"]')!.textContent).toBe("已保存");
+    input("firecrawlKey", "fc-new-key"); expect(firecrawl.type).toBe("text");
+    const save = vi.spyOn(plugin, "saveData").mockResolvedValueOnce({ code: -1, msg: "test save failure" });
+    click("settings"); await ready();
+    expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("保存配置失败"), 7000, "error");
+    expect(document.querySelector('[data-role="settingsState"]')!.textContent).toBe("未保存");
+    expect((fixtures.files.get("settings.json") as typeof DEFAULT_SETTINGS).firecrawlKey).toBe("");
+    save.mockRestore();
+  });
 
   it("creates, renames and deletes custom providers while preserving independent credentials", async () => {
     await launch(); click("toggleSettings");

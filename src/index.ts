@@ -5,7 +5,7 @@ import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
 import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, type ImageDecision, type ImageReviewResult } from "./review/images";
 import { localizeMarkdownImages, replaceImageAssetRefs } from "./images/localize";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
-import { isCustomProvider, moveProvider, orderedProviderIds, presetProfile, providerInfo, providerMark, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
+import { configuredProfiles, isCustomProvider, moveProvider, orderedProviderIds, presetProfile, providerInfo, providerMark, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { removePluginStorage } from "./siyuan/cleanup";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
@@ -197,6 +197,7 @@ export default class NoospherePlugin extends Plugin {
     const draft = this.draftStore.current;
     let article: Article | null = draft?.article || null;
     let busy = false;
+    let savingSettings = false;
     let reviewing = false;
     let cancelConfirmationOpen = false;
     let savedDocumentId = draft?.savedDocumentId || "";
@@ -296,10 +297,22 @@ export default class NoospherePlugin extends Plugin {
     const modelFormat = field<HTMLInputElement>("modelFormat");
     const modelVisionCapable = field<HTMLInputElement>("modelVisionCapable");
 
-    // Show a fixed set of dots for stored keys without exposing their lengths.
+    // 已保存的密钥使用固定圆点；空白输入默认明文，输入时不改变显隐模式。
+    const secretVisibility = new Map<ProviderId, boolean>();
     const syncSecretPreview = (input: HTMLInputElement): void => {
       const wrapper = input.closest<HTMLElement>(".noosphere__secret")!;
       wrapper.classList.toggle("has-value", Boolean(input.value));
+    };
+    const setSecretVisibility = (input: HTMLInputElement, visible: boolean): void => {
+      input.type = visible ? "text" : "password";
+      input.closest(".noosphere__secret")!.classList.toggle("is-revealed", visible);
+      const button = root.querySelector<HTMLButtonElement>(`[data-reveal="${input.dataset.field}"]`)!;
+      const label = `${visible ? "隐藏" : "显示"}密钥`;
+      button.setAttribute("aria-label", label);
+      button.setAttribute("title", label);
+      button.setAttribute("aria-pressed", String(visible));
+      if (input.dataset.field === "modelKey") secretVisibility.set(modelProvider.value as ProviderId, visible);
+      syncSecretPreview(input);
     };
     target.value = draft?.targetDocumentId || "";
     inputUrl.value = draft?.url || "";
@@ -307,20 +320,25 @@ export default class NoospherePlugin extends Plugin {
     for (const name of ["firecrawlKey", "modelBaseUrl", "modelKey", "modelName"] as const) {
       field(name).value = this.settings[name];
     }
-    root.querySelectorAll<HTMLInputElement>(".noosphere__secret input").forEach(input => {
-      syncSecretPreview(input);
-      input.addEventListener("input", () => syncSecretPreview(input));
-    });
     modelFormat.value = this.settings.modelFormat;
     modelVisionCapable.checked = this.settings.modelVisionCapable;
     modelProvider.value = this.settings.activeProvider;
+    root.querySelectorAll<HTMLInputElement>(".noosphere__secret input").forEach(input => {
+      setSecretVisibility(input, !input.value);
+      input.addEventListener("input", () => {
+        if (!input.value) setSecretVisibility(input, true);
+        else syncSecretPreview(input);
+      });
+    });
     imageProvider.value = this.settings.imageProvider;
-    setupPerspective.value = this.settings.reviewPerspective;
-    workPerspective.value = draft?.perspective || this.settings.reviewPerspective;
     workOutputLanguage.value = normalizeOutputLanguage(draft?.outputLanguage);
     let customProviders = this.settings.customProviders.map(item => ({ ...item }));
     let providerOrder = [...this.settings.providerOrder];
     let customPerspectives: ReviewPerspective[] = this.settings.customPerspectives.map(item => ({ ...item }));
+    /** 旧版“原文”和已删除视角回退到 AI 视角，正文及人工修改保持原样。 */
+    const availablePerspective = (id: string | undefined): string => id && (REVIEW_PERSPECTIVES[id as keyof typeof REVIEW_PERSPECTIVES] || customPerspectives.some(item => item.id === id)) ? id : "original";
+    setupPerspective.value = availablePerspective(this.settings.reviewPerspective);
+    workPerspective.value = availablePerspective(draft?.perspective || this.settings.reviewPerspective);
     const modelProfiles: Settings["modelProfiles"] = { ...this.settings.modelProfiles };
     let perspectiveTab: "prompt" | "template" = "prompt";
 
@@ -491,7 +509,7 @@ export default class NoospherePlugin extends Plugin {
       action("confirmArticle").disabled = busy;
       const activeCustom = customPerspectives.find(item => item.id === setupPerspective.value);
       action("scrape").disabled = busy || bodyEditing || sourceEditing || !inputUrl.value.trim();
-      action("review").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim() || workPerspective.value === "raw";
+      action("review").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim();
       action("review").textContent = reviewing ? "审阅中…" : "AI 审阅";
       action("cancelReview").hidden = !reviewing;
       action("cancelReview").disabled = !reviewing || !!reviewController?.signal.aborted;
@@ -548,8 +566,7 @@ export default class NoospherePlugin extends Plugin {
       savedContentChanged = restored.savedContentChanged || false;
       repairImageChoices(restored.imageDecisions);
       renderSavedLocation();
-      const perspective = restored.perspective === "raw" || REVIEW_PERSPECTIVES[restored.perspective as keyof typeof REVIEW_PERSPECTIVES]
-        || customPerspectives.some(item => item.id === restored.perspective) ? restored.perspective : "original";
+      const perspective = availablePerspective(restored.perspective);
       setDropdown("workPerspective", perspective, false);
       setDropdown("reviewPerspective", perspective, false);
       const language = normalizeOutputLanguage(restored.outputLanguage);
@@ -744,7 +761,7 @@ export default class NoospherePlugin extends Plugin {
         activeProvider,
         customProviders: customProviders.map(item => ({ ...item })),
         providerOrder: orderedProviderIds(customProviders, providerOrder),
-        modelProfiles: { ...modelProfiles },
+        modelProfiles: configuredProfiles(modelProfiles),
         imageProvider: imageProvider.value as Settings["imageProvider"],
         imageReview: !!imageProvider.value,
         customPerspectives: customPerspectives.map(item => ({ ...item, sections: undefined })),
@@ -754,6 +771,18 @@ export default class NoospherePlugin extends Plugin {
     const cloneSettings = (value: Settings): Settings => JSON.parse(JSON.stringify(value)) as Settings;
     const comparableSettings = ({ targetDocumentId: _targetDocumentId, ...config }: Settings): string => JSON.stringify(config);
     let setupBaseline: Settings | null = null;
+    /** 状态使用与离开确认相同的比较规则，不把显隐和浏览空白预设记作修改。 */
+    const refreshSettingsState = (): void => {
+      const dirty = !!setupBaseline && comparableSettings(readSettings()) !== comparableSettings(setupBaseline);
+      role("settingsState").textContent = savingSettings ? "保存中…" : dirty ? "未保存" : "已保存";
+      action("settings").textContent = savingSettings ? "保存中…" : "保存";
+      action("settings").disabled = busy || savingSettings;
+      action("toggleSettings").disabled = busy || savingSettings;
+    };
+    // 在字段及按钮处理完成后刷新，兼容隐藏选择框和拖动排序的状态变化。
+    for (const event of ["input", "change", "click", "drop", "keydown"]) {
+      setup.addEventListener(event, () => queueMicrotask(refreshSettingsState), true);
+    }
     const saveSettings = async (): Promise<Settings> => {
       const next = readSettings();
       for (const perspective of next.customPerspectives) validatePerspective(perspective);
@@ -764,6 +793,7 @@ export default class NoospherePlugin extends Plugin {
       if (result?.code !== 0) throw new Error(result?.msg || "配置保存失败");
       this.settings = next;
       setupBaseline = cloneSettings(next);
+      refreshSettingsState();
       return next;
     };
     /** 取消正在进行的审阅时恢复临时快照，图片取舍和来源元数据一起恢复。 */
@@ -943,13 +973,7 @@ export default class NoospherePlugin extends Plugin {
     root.addEventListener("click", event => { if (!(event.target as Element).closest(".noosphere__dropdown")) closeDropdowns(); });
     root.querySelectorAll<HTMLButtonElement>("[data-reveal]").forEach(button => button.addEventListener("click", () => {
       const input = field<HTMLInputElement>(button.dataset.reveal!);
-      const visible = input.type === "password";
-      input.type = visible ? "text" : "password";
-      input.closest(".noosphere__secret")!.classList.toggle("is-revealed", visible);
-      const label = `${visible ? "隐藏" : "显示"}密钥`;
-      button.setAttribute("aria-label", label);
-      button.setAttribute("title", label);
-      button.setAttribute("aria-pressed", String(visible));
+      setSecretVisibility(input, input.type === "password");
     }));
     const modelResults = root.querySelector<HTMLElement>('[data-role="modelResults"]')!;
     const modelOptions = root.querySelector<HTMLElement>('[data-role="modelOptions"]')!;
@@ -972,22 +996,22 @@ export default class NoospherePlugin extends Plugin {
     };
     const activePerspective = (): ReviewPerspective | null => {
       const id = setupPerspective.value;
-      if (id === "raw") return null;
       return REVIEW_PERSPECTIVES[id as keyof typeof REVIEW_PERSPECTIVES] || customPerspectives.find(item => item.id === id) || null;
     };
     const refreshPerspectiveEditor = (): void => {
       const perspective = activePerspective();
       const editable = !!perspective && customPerspectives.some(item => item.id === perspective.id);
       root.querySelector<HTMLElement>('[data-role="perspectiveMeta"]')!.hidden = !editable;
+      role("builtinPerspectiveHint").hidden = !perspective || editable;
       action("deletePerspective").hidden = !editable;
       const editor = field<HTMLTextAreaElement>("perspectiveEditor");
       editor.disabled = busy;
       editor.readOnly = !editable;
-      editor.value = perspective ? perspective.prompt : "原文模式直接使用抓取后的文章，不调用 AI。";
+      editor.value = perspective?.prompt || "";
       const templateEditor = field<HTMLTextAreaElement>("templateEditor");
       templateEditor.disabled = busy;
       templateEditor.readOnly = !editable;
-      templateEditor.value = perspective ? perspective.template : "原文模式直接保存抓取内容，不使用文章格式要求。";
+      templateEditor.value = perspective?.template || "";
       field<HTMLInputElement>("perspectiveLabel").value = editable ? perspective!.label : "";
       field<HTMLInputElement>("perspectiveDescription").value = editable ? perspective!.description : "";
       root.querySelector<HTMLElement>('[data-role="perspectivePrompt"]')!.hidden = perspectiveTab !== "prompt";
@@ -1147,15 +1171,12 @@ export default class NoospherePlugin extends Plugin {
       setDropdown("workPerspective", saved.reviewPerspective, false);
       refreshPerspectiveEditor();
       renderProviderView();
+      secretVisibility.clear();
       root.querySelectorAll<HTMLInputElement>(".noosphere__secret input").forEach(input => {
-        input.type = "password";
-        input.closest<HTMLElement>(".noosphere__secret")!.classList.remove("is-revealed");
-        const reveal = root.querySelector<HTMLButtonElement>(`[data-reveal="${input.dataset.field}"]`)!;
-        reveal.setAttribute("aria-label", "显示密钥");
-        reveal.setAttribute("title", "显示密钥");
-        reveal.setAttribute("aria-pressed", "false");
-        syncSecretPreview(input);
+        setSecretVisibility(input, !input.value);
       });
+      setupBaseline = cloneSettings(readSettings());
+      refreshSettingsState();
       updateActions();
     };
     modelProvider.addEventListener("change", () => {
@@ -1165,14 +1186,8 @@ export default class NoospherePlugin extends Plugin {
       setDropdown("modelFormat", next.modelFormat);
       field<HTMLInputElement>("modelBaseUrl").value = next.modelBaseUrl;
       const keyInput = field<HTMLInputElement>("modelKey");
-      keyInput.type = "password";
-      keyInput.closest(".noosphere__secret")!.classList.remove("is-revealed");
-      const revealButton = root.querySelector<HTMLButtonElement>('[data-reveal="modelKey"]')!;
-      revealButton.setAttribute("aria-label", "显示密钥");
-      revealButton.setAttribute("title", "显示密钥");
-      revealButton.setAttribute("aria-pressed", "false");
       keyInput.value = next.modelKey;
-      syncSecretPreview(keyInput);
+      setSecretVisibility(keyInput, secretVisibility.get(displayedProvider) ?? !next.modelKey);
       field<HTMLInputElement>("modelName").value = next.modelName;
       modelVisionCapable.checked = next.modelVisionCapable;
       renderProviderView();
@@ -1284,33 +1299,8 @@ export default class NoospherePlugin extends Plugin {
     });
     setupPerspective.addEventListener("change", () => { setDropdown("workPerspective", setupPerspective.value); action("deletePerspective").dataset.confirm = ""; action("deletePerspective").textContent = "删除视角"; refreshPerspectiveEditor(); updateActions(); });
     workPerspective.addEventListener("change", () => {
-      const previousPerspective = this.draftStore.current?.perspective || this.settings.reviewPerspective;
       setDropdown("reviewPerspective", workPerspective.value);
-      if (workPerspective.value === "raw" && article) {
-        if (bodyEdited) {
-          confirm("恢复抓取原文？", "当前人工修改将被原文替换。确定要恢复吗？", () => {
-            if (busy || this.uninstalled || !article) return;
-            markdown.value = article.markdown; editorState = undefined; bodyEdited = false;
-            reviewedMarkdown = ""; imageDecisions = []; reviewInfo = undefined; textReviewed = false;
-            progressPanel.hidden = true; markUnsaved(); renderArticle(); renderImageDecisions(); persistDraft(); updateActions();
-          }, () => {
-            setDropdown("workPerspective", previousPerspective, false);
-            setDropdown("reviewPerspective", previousPerspective, false);
-            persistDraft(); updateActions();
-          });
-          persistDraft(); updateActions(); return;
-        }
-        progressPanel.hidden = true;
-        markdown.value = article.markdown; editorState = undefined; bodyEdited = false;
-        reviewedMarkdown = "";
-        imageDecisions = [];
-        reviewInfo = undefined;
-        textReviewed = false;
-        renderImageDecisions();
-        markUnsaved();
-        renderArticle();
-        setStatus("已切换到抓取原文，可以直接检查并保存。");
-      }
+      refreshPerspectiveEditor();
       persistDraft();
       updateActions();
     });
@@ -1372,6 +1362,7 @@ export default class NoospherePlugin extends Plugin {
       if (setup.hidden) {
         setupBaseline = cloneSettings(readSettings());
         showView("setup");
+        refreshSettingsState();
         return;
       }
       if (!this.settings.firecrawlKey) {
@@ -1388,14 +1379,17 @@ export default class NoospherePlugin extends Plugin {
       showView("workbench");
     });
     action("settings").addEventListener("click", () => {
+      if (busy || savingSettings) return;
       void (async () => {
+        savingSettings = true;
+        refreshSettingsState();
         try {
-          if (!field("firecrawlKey").value.trim()) throw new Error("请填写 Firecrawl API Key");
           await saveSettings();
-          showView("workbench");
-          setStatus("配置就绪，粘贴文章链接开始抓取。", "success");
         } catch (error) {
           showMessage(`保存配置失败：${error instanceof Error ? error.message : String(error)}`, 7000, "error");
+        } finally {
+          savingSettings = false;
+          refreshSettingsState();
         }
       })();
     });
@@ -1602,5 +1596,6 @@ export default class NoospherePlugin extends Plugin {
     renderSavedLocation();
     showView(this.settings.firecrawlKey ? "workbench" : "setup");
     updateActions();
+    refreshSettingsState();
   }
 }

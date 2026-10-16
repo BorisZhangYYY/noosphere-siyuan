@@ -31,7 +31,11 @@ Capture new articles at the top, read and edit the body on the left, and review 
 4. Optionally choose a review perspective and output language on the right, then start AI review. Click an image thumbnail to inspect it and select its checkbox to remove it.
 5. Copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
 
+Perspectives and article formats apply when you start AI review. Captured articles can also be saved directly. The original-author and novice perspectives are built in, read-only and cannot be deleted; add a custom perspective to make adjustments.
+
 Choose the output language in the workbench: follow the SiYuan interface (default), keep the source language, Simplified Chinese or English. The choice belongs to the current article and is retained in its history. New articles default to the interface language; an empty workbench also lets you choose a language before capturing. You can add, rename and delete named custom providers with separate credentials and models; built-in providers cannot be deleted.
+
+Use Save beside the Settings heading; it stays visible while scrolling and keeps you on the settings page. After the status shows saved, use Return to Workbench. Empty API keys start visible while typing; stored keys start hidden and the eye button toggles visibility.
 
 Drag providers to reorder them, then save Settings to keep the order. You can also focus a provider and use Alt/Option + Up/Down.
 

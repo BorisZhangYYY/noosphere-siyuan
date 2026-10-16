@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { inferProvider, moveProvider, orderedProviderIds, providerMark, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, validateProviderName } from "../src/review/providers";
+import { configuredProfiles, inferProvider, moveProvider, orderedProviderIds, presetProfile, providerMark, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, validateProviderName } from "../src/review/providers";
 import { REVIEW_PERSPECTIVES, validatePerspective } from "../src/review/perspectives";
 import { captureContent } from "../src/ui";
 
 describe("supplier-first configuration", () => {
+  it("ignores untouched presets while retaining edited profiles in a stable order", () => {
+    const changed = { ...presetProfile("volcengine"), modelKey: "test-secret" };
+    const custom = { ...presetProfile("custom_gateway"), modelName: "test-model" };
+    expect(configuredProfiles({ google: presetProfile("google"), volcengine: changed, custom_gateway: custom })).toEqual({ custom_gateway: custom, volcengine: changed });
+    expect(JSON.stringify(configuredProfiles({ volcengine: changed, custom_gateway: custom }))).toBe(JSON.stringify(configuredProfiles({ custom_gateway: custom, volcengine: changed })));
+  });
   it("restores a complete unique order and moves built-in and custom suppliers without changing IDs", () => {
     const custom = [{ id: "custom_gateway" as const, label: "Gateway" }];
     const order = orderedProviderIds(custom, ["google", "custom_missing", "google", "custom_gateway"]);
