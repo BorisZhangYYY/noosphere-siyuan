@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { inferProvider, providerMark, PROVIDER_PRESETS, restoreProviders, validateProviderName } from "../src/review/providers";
+import { inferProvider, moveProvider, orderedProviderIds, providerMark, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, validateProviderName } from "../src/review/providers";
 import { REVIEW_PERSPECTIVES, validatePerspective } from "../src/review/perspectives";
 import { captureContent } from "../src/ui";
 
 describe("supplier-first configuration", () => {
+  it("restores a complete unique order and moves built-in and custom suppliers without changing IDs", () => {
+    const custom = [{ id: "custom_gateway" as const, label: "Gateway" }];
+    const order = orderedProviderIds(custom, ["google", "custom_missing", "google", "custom_gateway"]);
+    expect(order).toEqual(["google", "custom_gateway", ...PROVIDER_ORDER.filter(id => id !== "google")]);
+    expect(moveProvider(order, "custom_gateway", "google")).toEqual(["custom_gateway", "google", ...order.slice(2)]);
+    expect(moveProvider(order, "google", "custom_gateway", true)).toEqual(["custom_gateway", "google", ...order.slice(2)]);
+    expect(moveProvider(order, "custom_missing", "google")).toEqual(order);
+    expect(restoreProviders({ customProviders: custom, providerOrder: order }).providerOrder).toEqual(order);
+    expect(orderedProviderIds([], order)).not.toContain("custom_gateway");
+  });
+
   it("keeps Kimi API and Kimi Code as separate credential profiles", () => {
     expect(inferProvider("https://api.kimi.com/coding/")).toBe("kimi_code");
     expect(inferProvider("https://api.moonshot.cn/v1")).toBe("kimi_api");

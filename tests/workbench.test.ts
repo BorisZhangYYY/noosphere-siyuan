@@ -142,6 +142,43 @@ describe("workbench regression", () => {
     expect(saved.customProviders.some(item => item.id === first)).toBe(false);
   });
 
+  it("drags suppliers into order and restores it without switching credentials", async () => {
+    await launch(); click("toggleSettings");
+    const ids = (): string[] => Array.from(document.querySelectorAll<HTMLElement>('[data-provider-id]'), item => item.dataset.providerId!);
+    const drag = (source: string, target: string): void => {
+      const transfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+      for (const [id, type] of [[source, "dragstart"], [target, "dragover"], [target, "drop"]]) {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperties(event, { dataTransfer: { value: transfer }, clientY: { value: 0 } });
+        document.querySelector(`[data-provider-id="${id}"]`)!.dispatchEvent(event);
+      }
+    };
+    const active = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    const key = document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value;
+    drag("google", "kimi_api");
+    expect(ids()[0]).toBe("google");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value).toBe(active);
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe(key);
+    click("addProvider"); input("newProviderName", "Move Me"); click("createProvider");
+    const custom = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    drag(custom, "google");
+    expect(ids().slice(0, 2)).toEqual([custom, "google"]);
+    const order = ids();
+    click("settings"); await ready();
+    expect((fixtures.files.get("settings.json") as import("../src/types").Settings).providerOrder).toEqual(order);
+    fixtures.dialogs.at(-1)!.destroy(); await launch(); click("toggleSettings");
+    expect(ids()).toEqual(order);
+    // 已有设置的放弃流程也须恢复顺序。
+    drag("google", custom);
+    click("toggleSettings"); fixtures.confirm.mock.calls.at(-1)![2](); click("toggleSettings");
+    expect(ids()).toEqual(order);
+    const button = document.querySelector<HTMLButtonElement>(`[data-provider-id="${custom}"]`)!;
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", altKey: true, bubbles: true }));
+    expect(ids().slice(0, 2)).toEqual(["google", custom]);
+    click("deleteProvider"); click("deleteProvider"); click("settings"); await ready();
+    expect((fixtures.files.get("settings.json") as import("../src/types").Settings).providerOrder).not.toContain(custom);
+  });
+
   it("discards unsaved provider additions and rejects duplicate names", async () => {
     await launch(); click("toggleSettings");
     click("addProvider"); input("newProviderName", "Kimi API"); click("createProvider");

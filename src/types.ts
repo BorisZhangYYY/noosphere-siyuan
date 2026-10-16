@@ -11,6 +11,7 @@ export interface Settings {
   modelFormat: "openai_chat" | "openai_responses" | "anthropic" | "google";
   activeProvider: import("./review/providers").ProviderId;
   customProviders: import("./review/providers").CustomProvider[];
+  providerOrder: import("./review/providers").ProviderId[];
   modelProfiles: Partial<Record<import("./review/providers").ProviderId, import("./review/providers").ModelProfile>>;
   imageProvider: import("./review/providers").ProviderId | "";
   imageReview: boolean;
@@ -57,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   activeProvider: "custom",
   modelProfiles: {},
   customProviders: [],
+  providerOrder: [],
   imageProvider: "",
   imageReview: false,
   modelVisionCapable: false,

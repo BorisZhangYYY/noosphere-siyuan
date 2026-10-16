@@ -33,6 +33,8 @@ Capture new articles at the top, read and edit the body on the left, and review 
 
 Choose the output language in the workbench: follow the SiYuan interface (default), keep the source language, Simplified Chinese or English. The choice belongs to the current article and is retained in its history. New articles default to the interface language; an empty workbench also lets you choose a language before capturing. You can add, rename and delete named custom providers with separate credentials and models; built-in providers cannot be deleted.
 
+Drag providers to reorder them, then save Settings to keep the order. You can also focus a provider and use Alt/Option + Up/Down.
+
 The plugin creates no draft documents, notebooks or folders. Each article keeps its own destination choice. Saving changed content to an existing document appends another import; it does not synchronize with an earlier import.
 
 Changes between versions are recorded in the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md).

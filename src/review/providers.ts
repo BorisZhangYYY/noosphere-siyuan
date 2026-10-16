@@ -33,6 +33,20 @@ export const PROVIDER_PRESETS: Record<BuiltinProviderId | "custom", ProviderPres
 
 export const PROVIDER_ORDER: BuiltinProviderId[] = ["kimi_api", "kimi_code", "volcengine", "minimax", "zhipu", "openai", "anthropic", "google"];
 
+/** 恢复排序时去重并移除已删除供应商，新增项追加到末尾。 */
+export function orderedProviderIds(customProviders: CustomProvider[], savedOrder: readonly ProviderId[] = []): ProviderId[] {
+  const available: ProviderId[] = [...PROVIDER_ORDER, ...customProviders.map(item => item.id)];
+  return [...new Set([...savedOrder.filter(id => available.includes(id)), ...available])];
+}
+
+/** 仅移动顺序，不修改供应商标识、凭据或当前选择。 */
+export function moveProvider(order: readonly ProviderId[], source: ProviderId, target: ProviderId, after = false): ProviderId[] {
+  if (source === target || !order.includes(source) || !order.includes(target)) return [...order];
+  const next = order.filter(id => id !== source);
+  next.splice(next.indexOf(target) + Number(after), 0, source);
+  return next;
+}
+
 export function isCustomProvider(id: string): boolean {
   return id === "custom" || /^custom_[a-z0-9_-]+$/.test(id);
 }
@@ -78,7 +92,7 @@ export function inferProvider(baseUrl: string): ProviderId {
 }
 
 /** Move older flat model settings into one supplier profile without losing its key. */
-export function restoreProviders(saved: Partial<Settings> | null): Pick<Settings, "activeProvider" | "customProviders" | "modelProfiles" | "imageProvider" | "imageReview" | keyof ModelProfile> {
+export function restoreProviders(saved: Partial<Settings> | null): Pick<Settings, "activeProvider" | "customProviders" | "providerOrder" | "modelProfiles" | "imageProvider" | "imageReview" | keyof ModelProfile> {
   const customProviders = (saved?.customProviders || []).filter((item, index, all) => item && isCustomProvider(item.id) && item.label?.trim() && all.findIndex(other => other?.id === item.id) === index)
     .map(item => ({ id: item.id, label: item.label.trim() }));
   const inferred = saved?.modelBaseUrl ? inferProvider(saved.modelBaseUrl) : "kimi_api";
@@ -97,5 +111,5 @@ export function restoreProviders(saved: Partial<Settings> | null): Pick<Settings
   const active = modelProfiles[activeProvider]!;
   const candidate = saved?.imageProvider || (saved?.imageReview && active.modelVisionCapable ? activeProvider : "");
   const imageProvider = candidate && ids.includes(candidate) && modelProfiles[candidate]?.modelVisionCapable ? candidate : "";
-  return { activeProvider, customProviders, modelProfiles, imageProvider, imageReview: !!imageProvider, ...active };
+  return { activeProvider, customProviders, providerOrder: orderedProviderIds(customProviders, saved?.providerOrder), modelProfiles, imageProvider, imageReview: !!imageProvider, ...active };
 }

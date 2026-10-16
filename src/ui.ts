@@ -38,7 +38,7 @@ export function captureContent(): string {
         <div class="noosphere__provider-heading"><h4>模型供应商</h4><button data-action="addProvider" class="b3-button b3-button--outline" type="button">新增供应商</button></div>
         <div class="noosphere__provider-create" data-role="providerCreator" hidden><label>供应商名称<input data-field="newProviderName" class="b3-text-field" maxlength="40" placeholder="例如 My Gateway"></label><button data-action="createProvider" class="b3-button" type="button">创建供应商</button><button data-action="cancelProvider" class="b3-button b3-button--outline" type="button">取消</button><p data-role="providerError" role="alert" hidden></p></div>
         <input type="hidden" data-field="modelProvider">
-        <div class="noosphere__provider-workspace"><nav class="noosphere__provider-list" data-role="providerList" aria-label="模型供应商"></nav><div class="noosphere__provider-detail">
+        <div class="noosphere__provider-workspace"><div class="noosphere__provider-list-panel"><nav class="noosphere__provider-list" data-role="providerList" aria-label="模型供应商"></nav></div><div class="noosphere__provider-detail">
         <div class="noosphere__provider-identity"><p data-role="providerDescription"></p><button data-action="deleteProvider" class="b3-button b3-button--outline" type="button" hidden>删除供应商</button></div>
         <label data-role="providerName" hidden>供应商名称<input data-field="providerName" class="b3-text-field" maxlength="40"></label>
         <div class="noosphere__provider-fields">

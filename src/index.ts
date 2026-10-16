@@ -5,7 +5,7 @@ import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
 import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, type ImageDecision, type ImageReviewResult } from "./review/images";
 import { localizeMarkdownImages, replaceImageAssetRefs } from "./images/localize";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
-import { isCustomProvider, presetProfile, providerInfo, providerMark, PROVIDER_ORDER, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
+import { isCustomProvider, moveProvider, orderedProviderIds, presetProfile, providerInfo, providerMark, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { removePluginStorage } from "./siyuan/cleanup";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
@@ -319,6 +319,7 @@ export default class NoospherePlugin extends Plugin {
     workPerspective.value = draft?.perspective || this.settings.reviewPerspective;
     workOutputLanguage.value = normalizeOutputLanguage(draft?.outputLanguage);
     let customProviders = this.settings.customProviders.map(item => ({ ...item }));
+    let providerOrder = [...this.settings.providerOrder];
     let customPerspectives: ReviewPerspective[] = this.settings.customPerspectives.map(item => ({ ...item }));
     const modelProfiles: Settings["modelProfiles"] = { ...this.settings.modelProfiles };
     let perspectiveTab: "prompt" | "template" = "prompt";
@@ -742,6 +743,7 @@ export default class NoospherePlugin extends Plugin {
         ...profile,
         activeProvider,
         customProviders: customProviders.map(item => ({ ...item })),
+        providerOrder: orderedProviderIds(customProviders, providerOrder),
         modelProfiles: { ...modelProfiles },
         imageProvider: imageProvider.value as Settings["imageProvider"],
         imageReview: !!imageProvider.value,
@@ -994,7 +996,14 @@ export default class NoospherePlugin extends Plugin {
       action("templateTab").classList.toggle("is-active", perspectiveTab === "template");
     };
     let displayedProvider: ProviderId = this.settings.activeProvider;
-    const providerIds = (): ProviderId[] => [...PROVIDER_ORDER, ...customProviders.map(item => item.id)];
+    const providerIds = (): ProviderId[] => orderedProviderIds(customProviders, providerOrder);
+    let draggingProvider: ProviderId | null = null;
+    const clearProviderDrag = (finished = true): void => {
+      role("providerList").querySelectorAll<HTMLElement>("[data-provider-id]").forEach(button => {
+        delete button.dataset.dropPosition;
+        if (finished) button.classList.remove("is-dragging");
+      });
+    };
     /** 供应商列表只使用文本节点，用户命名不会成为 HTML。 */
     const renderProviderList = (): void => {
       const list = role("providerList");
@@ -1005,15 +1014,63 @@ export default class NoospherePlugin extends Plugin {
         button.type = "button";
         button.dataset.providerId = id;
         button.setAttribute("aria-pressed", String(id === displayedProvider));
+        button.draggable = true;
+        button.title = `${info.label}：拖动调整顺序；Alt+↑/↓ 移动`;
         button.disabled = busy;
         const mark = document.createElement("span");
         mark.className = `noosphere__provider-mark noosphere__provider-mark--${isCustomProvider(id) ? "custom" : id}`;
         mark.textContent = providerMark(id, info.label);
         mark.setAttribute("aria-hidden", "true");
         const name = document.createElement("span");
+        name.className = "noosphere__provider-name";
         name.textContent = info.label;
-        button.append(mark, name);
+        const grip = document.createElement("span");
+        grip.className = "noosphere__provider-grip";
+        grip.setAttribute("aria-hidden", "true");
+        grip.textContent = "⠿";
+        button.append(mark, name, grip);
         button.addEventListener("click", () => { if (!busy) setDropdown("modelProvider", id); });
+        button.addEventListener("dragstart", event => {
+          if (busy) { event.preventDefault(); return; }
+          draggingProvider = id;
+          event.dataTransfer?.setData("application/x-noosphere-provider", id);
+          if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+          button.classList.add("is-dragging");
+        });
+        button.addEventListener("dragover", event => {
+          if (busy || !draggingProvider || draggingProvider === id) return;
+          event.preventDefault();
+          if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+          clearProviderDrag(false);
+          const bounds = button.getBoundingClientRect();
+          button.dataset.dropPosition = event.clientY <= bounds.top + bounds.height / 2 ? "before" : "after";
+          const viewport = list.getBoundingClientRect();
+          if (event.clientY < viewport.top + 28) list.scrollTop -= 12;
+          else if (event.clientY > viewport.bottom - 28) list.scrollTop += 12;
+        });
+        button.addEventListener("dragleave", () => { delete button.dataset.dropPosition; });
+        button.addEventListener("drop", event => {
+          if (busy || !draggingProvider) return;
+          event.preventDefault();
+          const bounds = button.getBoundingClientRect();
+          providerOrder = moveProvider(providerIds(), draggingProvider, id, event.clientY > bounds.top + bounds.height / 2);
+          draggingProvider = null;
+          clearProviderDrag();
+          renderProviderList();
+          renderImageProviderOptions();
+        });
+        button.addEventListener("dragend", () => { draggingProvider = null; clearProviderDrag(); });
+        button.addEventListener("keydown", event => {
+          if (busy || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+          event.preventDefault();
+          const ids = providerIds();
+          const next = ids[ids.indexOf(id) + (event.key === "ArrowUp" ? -1 : 1)];
+          if (!next) return;
+          providerOrder = moveProvider(ids, id, next, event.key === "ArrowDown");
+          renderProviderList();
+          renderImageProviderOptions();
+          list.querySelector<HTMLButtonElement>(`[data-provider-id="${id}"]`)?.focus();
+        });
         list.append(button);
       }
     };
@@ -1070,6 +1127,7 @@ export default class NoospherePlugin extends Plugin {
     const restoreSetup = (saved: Settings): void => {
       customPerspectives = saved.customPerspectives.map(item => ({ ...item }));
       customProviders = saved.customProviders.map(item => ({ ...item }));
+      providerOrder = [...saved.providerOrder];
       for (const id of Object.keys(modelProfiles)) delete modelProfiles[id as ProviderId];
       for (const [id, profile] of Object.entries(saved.modelProfiles)) {
         if (profile) modelProfiles[id as ProviderId] = { ...profile };
