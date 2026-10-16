@@ -2,6 +2,7 @@
 export interface Settings {
   topBarPosition: "left" | "right";
   reviewPerspective: string;
+  /** 单次审阅的语言参数，不作为全局设置持久化。 */
   outputLanguage: import("./review/language").OutputLanguage;
   firecrawlKey: string;
   modelBaseUrl: string;
@@ -9,6 +10,8 @@ export interface Settings {
   modelName: string;
   modelFormat: "openai_chat" | "openai_responses" | "anthropic" | "google";
   activeProvider: import("./review/providers").ProviderId;
+  customProviders: import("./review/providers").CustomProvider[];
+  providerOrder: import("./review/providers").ProviderId[];
   modelProfiles: Partial<Record<import("./review/providers").ProviderId, import("./review/providers").ModelProfile>>;
   imageProvider: import("./review/providers").ProviderId | "";
   imageReview: boolean;
@@ -54,6 +57,8 @@ export const DEFAULT_SETTINGS: Settings = {
   modelFormat: "openai_chat",
   activeProvider: "custom",
   modelProfiles: {},
+  customProviders: [],
+  providerOrder: [],
   imageProvider: "",
   imageReview: false,
   modelVisionCapable: false,

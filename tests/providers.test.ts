@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { inferProvider, PROVIDER_PRESETS, restoreProviders } from "../src/review/providers";
+import { configuredProfiles, inferProvider, moveProvider, orderedProviderIds, presetProfile, providerMark, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, validateProviderName } from "../src/review/providers";
 import { REVIEW_PERSPECTIVES, validatePerspective } from "../src/review/perspectives";
 import { captureContent } from "../src/ui";
 
 describe("supplier-first configuration", () => {
+  it("ignores untouched presets while retaining edited profiles in a stable order", () => {
+    const changed = { ...presetProfile("volcengine"), modelKey: "test-secret" };
+    const custom = { ...presetProfile("custom_gateway"), modelName: "test-model" };
+    expect(configuredProfiles({ google: presetProfile("google"), volcengine: changed, custom_gateway: custom })).toEqual({ custom_gateway: custom, volcengine: changed });
+    expect(JSON.stringify(configuredProfiles({ volcengine: changed, custom_gateway: custom }))).toBe(JSON.stringify(configuredProfiles({ custom_gateway: custom, volcengine: changed })));
+  });
+  it("restores a complete unique order and moves built-in and custom suppliers without changing IDs", () => {
+    const custom = [{ id: "custom_gateway" as const, label: "Gateway" }];
+    const order = orderedProviderIds(custom, ["google", "custom_missing", "google", "custom_gateway"]);
+    expect(order).toEqual(["google", "custom_gateway", ...PROVIDER_ORDER.filter(id => id !== "google")]);
+    expect(moveProvider(order, "custom_gateway", "google")).toEqual(["custom_gateway", "google", ...order.slice(2)]);
+    expect(moveProvider(order, "google", "custom_gateway", true)).toEqual(["custom_gateway", "google", ...order.slice(2)]);
+    expect(moveProvider(order, "custom_missing", "google")).toEqual(order);
+    expect(restoreProviders({ customProviders: custom, providerOrder: order }).providerOrder).toEqual(order);
+    expect(orderedProviderIds([], order)).not.toContain("custom_gateway");
+  });
+
   it("keeps Kimi API and Kimi Code as separate credential profiles", () => {
     expect(inferProvider("https://api.kimi.com/coding/")).toBe("kimi_code");
     expect(inferProvider("https://api.moonshot.cn/v1")).toBe("kimi_api");
@@ -22,12 +39,34 @@ describe("supplier-first configuration", () => {
     expect(switched.modelProfiles.zhipu?.modelKey).toBe("other-secret");
   });
 
+  it("migrates the old custom profile without losing credentials or image selection", () => {
+    const profile = { modelFormat: "openai_chat" as const, modelBaseUrl: "https://gateway.example/v1", modelKey: "legacy-secret", modelName: "vision", modelVisionCapable: true };
+    const restored = restoreProviders({ activeProvider: "custom", modelProfiles: { custom: profile }, imageProvider: "custom", ...profile });
+    expect(restored.customProviders).toEqual([{ id: "custom", label: "自定义" }]);
+    expect(restored.modelProfiles.custom).toEqual(profile);
+    expect(restored.imageProvider).toBe("custom");
+    const again = restoreProviders(restored);
+    expect(again).toEqual(restored);
+  });
+
+  it("restores named providers and drops references to removed providers", () => {
+    const profile = { modelFormat: "anthropic" as const, modelBaseUrl: "https://gateway.example", modelKey: "secret", modelName: "model", modelVisionCapable: true };
+    const restored = restoreProviders({ activeProvider: "custom_test", customProviders: [{ id: "custom_test", label: "My Gateway" }], modelProfiles: { custom_test: profile }, imageProvider: "custom_missing" });
+    expect(restored.activeProvider).toBe("custom_test");
+    expect(restored.modelKey).toBe("secret");
+    expect(restored.imageProvider).toBe("");
+    expect(providerMark("custom_test", "my gateway")).toBe("MY");
+    expect(validateProviderName(" new ", restored.customProviders)).toBe("new");
+    expect(() => validateProviderName("my gateway", restored.customProviders)).toThrow("已存在");
+    expect(() => validateProviderName("Kimi API", [])).toThrow("已存在");
+  });
+
   it("shows supplier presets and text template editing without the SiYuan AI option", () => {
     const content = captureContent();
     expect(content).toContain('data-field="modelProvider"');
     expect(content).toContain('data-field="imageProvider"');
     expect(content).toContain('data-field="templateEditor"');
-    expect(content).toContain("Kimi Code");
+    expect(content).toContain('data-role="providerList"');
     expect(content).not.toContain("使用思源已配置的 AI");
     expect(content).not.toContain("可视化格式");
   });
