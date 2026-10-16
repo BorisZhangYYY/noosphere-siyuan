@@ -44,9 +44,10 @@ export function captureContent(): string {
         <div class="noosphere__provider-fields">
           <label>API Key${secret("modelKey")}</label>
           <div class="noosphere__model-row"><label>模型<input data-field="modelName" class="b3-text-field" placeholder="输入模型 ID，或获取可用模型"></label><button data-action="listModels" class="b3-button b3-button--outline" type="button">获取模型</button></div>
+          ${dropdown("modelFormat", "接口协议", formatOptions)}
+          <label>API 地址<input data-field="modelBaseUrl" class="b3-text-field" type="url" placeholder="https://api.example.com/v1"></label>
           <div class="noosphere__model-results" data-role="modelResults" hidden><span data-role="modelResultsLabel"></span><input data-role="modelSearch" class="b3-text-field" type="search" aria-label="筛选模型" placeholder="筛选模型名称"><div data-role="modelOptions" class="noosphere__model-options"></div></div>
           <label class="noosphere__vision-option"><input data-field="modelVisionCapable" type="checkbox"> 这个模型支持识图</label>
-          <details class="noosphere__advanced" data-role="providerAdvanced"><summary>接口设置</summary>${dropdown("modelFormat", "接口协议", formatOptions)}<label>API 地址<input data-field="modelBaseUrl" class="b3-text-field" type="url" placeholder="https://api.example.com/v1"></label></details>
         </div>
         </div></div>
         ${dropdown("outputLanguage", "默认文章输出语言", OUTPUT_LANGUAGE_OPTIONS)}<p class="noosphere__field-help">用于新抓取的文章；当前文章可在工作台单独调整。</p>

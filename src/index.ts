@@ -1061,7 +1061,6 @@ export default class NoospherePlugin extends Plugin {
       action("deleteProvider").hidden = !custom;
       action("deleteProvider").dataset.confirm = "";
       action("deleteProvider").textContent = "删除供应商";
-      root.querySelector<HTMLDetailsElement>('[data-role="providerAdvanced"]')!.open = custom;
       modelResults.hidden = true;
       modelOptions.replaceChildren();
       renderProviderList();
