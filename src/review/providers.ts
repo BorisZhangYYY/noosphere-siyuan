@@ -1,7 +1,10 @@
 /** Built-in provider profiles mirror Noosphere's supplier-first model setup. */
 import type { Settings } from "../types";
 
-export type ProviderId = "kimi_api" | "kimi_code" | "volcengine" | "minimax" | "zhipu" | "openai" | "anthropic" | "google" | "custom";
+export type BuiltinProviderId = "kimi_api" | "kimi_code" | "volcengine" | "minimax" | "zhipu" | "openai" | "anthropic" | "google";
+export type ProviderId = BuiltinProviderId | "custom" | `custom_${string}`;
+/** 自定义供应商使用稳定标识，改名不影响密钥和图片模型引用。 */
+export interface CustomProvider { id: ProviderId; label: string }
 export interface ModelProfile {
   modelFormat: Settings["modelFormat"];
   modelBaseUrl: string;
@@ -16,7 +19,7 @@ export interface ProviderPreset extends ModelProfile {
   keyUrl: string;
 }
 
-export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
+export const PROVIDER_PRESETS: Record<BuiltinProviderId | "custom", ProviderPreset> = {
   kimi_api: { id: "kimi_api", label: "Kimi API", description: "月之暗面开放平台", modelFormat: "openai_chat", modelBaseUrl: "https://api.moonshot.cn/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://platform.kimi.com/console/api-keys" },
   kimi_code: { id: "kimi_code", label: "Kimi Code", description: "Kimi Code 控制台", modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelKey: "", modelName: "kimi-for-coding", modelVisionCapable: false, keyUrl: "https://www.kimi.com/code/console" },
   volcengine: { id: "volcengine", label: "火山引擎", description: "火山方舟模型服务", modelFormat: "openai_chat", modelBaseUrl: "https://ark.cn-beijing.volces.com/api/v3", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://ark.volcengine.com/region:cn-beijing/apikey" },
@@ -28,11 +31,36 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
   custom: { id: "custom", label: "自定义", description: "兼容 OpenAI、Anthropic 或 Gemini 的接口", modelFormat: "openai_chat", modelBaseUrl: "", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "" },
 };
 
-export const PROVIDER_ORDER: ProviderId[] = ["kimi_api", "kimi_code", "volcengine", "minimax", "zhipu", "openai", "anthropic", "google", "custom"];
+export const PROVIDER_ORDER: BuiltinProviderId[] = ["kimi_api", "kimi_code", "volcengine", "minimax", "zhipu", "openai", "anthropic", "google"];
+
+export function isCustomProvider(id: string): boolean {
+  return id === "custom" || /^custom_[a-z0-9_-]+$/.test(id);
+}
+
+/** 合并内置与命名供应商；名称仅作显示，不作为存储键。 */
+export function providerInfo(id: ProviderId, customProviders: CustomProvider[]): ProviderPreset {
+  if (!isCustomProvider(id)) return PROVIDER_PRESETS[id as BuiltinProviderId];
+  return { ...PROVIDER_PRESETS.custom, id, label: customProviders.find(item => item.id === id)?.label || "自定义" };
+}
+
+export function providerMark(id: ProviderId, label: string): string {
+  return isCustomProvider(id) ? Array.from(label.trim()).slice(0, 2).join("").toLocaleUpperCase()
+    : ({ kimi_api: "K", kimi_code: "C", volcengine: "火", minimax: "M", zhipu: "智", openai: "O", anthropic: "A", google: "G" } as Record<BuiltinProviderId, string>)[id as BuiltinProviderId];
+}
+
+/** 校验名称以免同一列表出现无法区分的供应商。 */
+export function validateProviderName(label: string, customProviders: CustomProvider[], exceptId?: ProviderId): string {
+  const name = label.trim();
+  if (!name || Array.from(name).length > 40) throw new Error("供应商名称需要 1–40 个字符");
+  const duplicate = [...PROVIDER_ORDER.map(id => ({ id, label: PROVIDER_PRESETS[id].label })), ...customProviders]
+    .some(item => item.id !== exceptId && item.label.toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (duplicate) throw new Error("供应商名称已存在");
+  return name;
+}
 
 /** Copy only request settings, leaving presentation metadata outside persisted profiles. */
 export function presetProfile(id: ProviderId): ModelProfile {
-  const { modelFormat, modelBaseUrl, modelKey, modelName, modelVisionCapable } = PROVIDER_PRESETS[id];
+  const { modelFormat, modelBaseUrl, modelKey, modelName, modelVisionCapable } = isCustomProvider(id) ? PROVIDER_PRESETS.custom : PROVIDER_PRESETS[id as BuiltinProviderId];
   return { modelFormat, modelBaseUrl, modelKey, modelName, modelVisionCapable };
 }
 
@@ -50,14 +78,24 @@ export function inferProvider(baseUrl: string): ProviderId {
 }
 
 /** Move older flat model settings into one supplier profile without losing its key. */
-export function restoreProviders(saved: Partial<Settings> | null): Pick<Settings, "activeProvider" | "modelProfiles" | "imageProvider" | "imageReview" | keyof ModelProfile> {
-  const activeProvider = saved?.activeProvider && PROVIDER_PRESETS[saved.activeProvider]
-    ? saved.activeProvider : saved?.modelBaseUrl ? inferProvider(saved.modelBaseUrl) : "kimi_api";
+export function restoreProviders(saved: Partial<Settings> | null): Pick<Settings, "activeProvider" | "customProviders" | "modelProfiles" | "imageProvider" | "imageReview" | keyof ModelProfile> {
+  const customProviders = (saved?.customProviders || []).filter((item, index, all) => item && isCustomProvider(item.id) && item.label?.trim() && all.findIndex(other => other?.id === item.id) === index)
+    .map(item => ({ id: item.id, label: item.label.trim() }));
+  const inferred = saved?.modelBaseUrl ? inferProvider(saved.modelBaseUrl) : "kimi_api";
+  // 旧版单个“自定义”原位迁移，保留其凭据与图片审阅关联。
+  if (!customProviders.some(item => item.id === "custom") && (saved?.activeProvider === "custom" || saved?.modelProfiles?.custom || inferred === "custom")) {
+    customProviders.push({ id: "custom", label: "自定义" });
+  }
+  const ids: ProviderId[] = [...PROVIDER_ORDER, ...customProviders.map(item => item.id)];
+  const activeProvider = saved?.activeProvider && ids.includes(saved.activeProvider) ? saved.activeProvider : inferred;
   const oldProfile: ModelProfile = saved?.modelBaseUrl
     ? { modelFormat: saved.modelFormat || "openai_chat", modelBaseUrl: saved.modelBaseUrl, modelKey: saved.modelKey || "", modelName: saved.modelName || "", modelVisionCapable: !!saved.modelVisionCapable }
     : presetProfile(activeProvider);
-  const modelProfiles = { ...(saved?.modelProfiles || {}), [activeProvider]: saved?.modelProfiles?.[activeProvider] || oldProfile };
+  const modelProfiles: Settings["modelProfiles"] = {};
+  for (const id of ids) if (saved?.modelProfiles?.[id]) modelProfiles[id] = { ...saved.modelProfiles[id]! };
+  modelProfiles[activeProvider] ||= oldProfile;
   const active = modelProfiles[activeProvider]!;
-  const imageProvider = saved?.imageProvider || (saved?.imageReview && active.modelVisionCapable ? activeProvider : "");
-  return { activeProvider, modelProfiles, imageProvider, imageReview: !!imageProvider, ...active };
+  const candidate = saved?.imageProvider || (saved?.imageReview && active.modelVisionCapable ? activeProvider : "");
+  const imageProvider = candidate && ids.includes(candidate) && modelProfiles[candidate]?.modelVisionCapable ? candidate : "";
+  return { activeProvider, customProviders, modelProfiles, imageProvider, imageReview: !!imageProvider, ...active };
 }

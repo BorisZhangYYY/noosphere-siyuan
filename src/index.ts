@@ -5,7 +5,7 @@ import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
 import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, type ImageDecision, type ImageReviewResult } from "./review/images";
 import { localizeMarkdownImages, replaceImageAssetRefs } from "./images/localize";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
-import { presetProfile, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, type ModelProfile, type ProviderId } from "./review/providers";
+import { isCustomProvider, presetProfile, providerInfo, providerMark, PROVIDER_ORDER, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { removePluginStorage } from "./siyuan/cleanup";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
@@ -318,7 +318,9 @@ export default class NoospherePlugin extends Plugin {
     imageProvider.value = this.settings.imageProvider;
     setupPerspective.value = this.settings.reviewPerspective;
     workPerspective.value = draft?.perspective || this.settings.reviewPerspective;
-    outputLanguage.value = workOutputLanguage.value = normalizeOutputLanguage(draft?.outputLanguage || this.settings.outputLanguage);
+    outputLanguage.value = normalizeOutputLanguage(this.settings.outputLanguage);
+    workOutputLanguage.value = normalizeOutputLanguage(draft?.outputLanguage || this.settings.outputLanguage);
+    let customProviders = this.settings.customProviders.map(item => ({ ...item }));
     let customPerspectives: ReviewPerspective[] = this.settings.customPerspectives.map(item => ({ ...item }));
     const modelProfiles: Settings["modelProfiles"] = { ...this.settings.modelProfiles };
     let perspectiveTab: "prompt" | "template" = "prompt";
@@ -327,7 +329,7 @@ export default class NoospherePlugin extends Plugin {
     /** 已保存位置描述实际导入记录，正文改动或另选位置时仍可打开原文档。 */
     const renderSavedLocation = (): void => {
       saved.hidden = !article || !savedDocumentId;
-      saved.querySelector("span")!.textContent = `${savedContentChanged ? "此前已保存到" : "已保存到"} · ${savedDocumentId}`;
+      saved.querySelector("span")!.textContent = "已保存";
     };
     /** 来源与正文各自排版，正文滚动不会带走右侧保存按钮。 */
     const renderArticle = (): void => {
@@ -496,9 +498,10 @@ export default class NoospherePlugin extends Plugin {
       action("cancelReview").disabled = !reviewing || !!reviewController?.signal.aborted;
       action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim() || !target.value.trim() || savedToTarget();
       action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
-      for (const name of ["settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab"] as const) action(name).disabled = busy;
+      for (const name of ["settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
+      role("providerList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       root.querySelectorAll<HTMLButtonElement>("[data-select-trigger], [data-select-option], [data-reveal]").forEach(button => { button.disabled = busy; });
       root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || (savedToTarget() && !!input.closest(".noosphere__asset")); });
       for (const sourceField of [sourceAuthor, sourcePublished]) { sourceField.disabled = busy || !article || !sourceEditing; sourceField.hidden = !sourceEditing; }
@@ -551,7 +554,7 @@ export default class NoospherePlugin extends Plugin {
       setDropdown("workPerspective", perspective, false);
       setDropdown("reviewPerspective", perspective, false);
       const language = normalizeOutputLanguage(restored.outputLanguage || this.settings.outputLanguage);
-      setDropdown("workOutputLanguage", language, false); setDropdown("outputLanguage", language, false);
+      setDropdown("workOutputLanguage", language, false);
       progressPanel.hidden = true;
       selectedImage = undefined;
       renderSelectedImage();
@@ -736,10 +739,11 @@ export default class NoospherePlugin extends Plugin {
       return {
         topBarPosition: this.settings.topBarPosition,
         reviewPerspective: workPerspective.value,
-        outputLanguage: normalizeOutputLanguage(workOutputLanguage.value),
+        outputLanguage: normalizeOutputLanguage(outputLanguage.value),
         firecrawlKey: field("firecrawlKey").value.trim(),
         ...profile,
         activeProvider,
+        customProviders: customProviders.map(item => ({ ...item })),
         modelProfiles: { ...modelProfiles },
         imageProvider: imageProvider.value as Settings["imageProvider"],
         imageReview: !!imageProvider.value,
@@ -889,6 +893,12 @@ export default class NoospherePlugin extends Plugin {
     // Styled listboxes synchronize through hidden inputs so both views share one setting.
     const setDropdown = (name: string, value: string, emitChange = true): void => {
       const control = field<HTMLInputElement>(name);
+      if (name === "modelProvider") {
+        const changed = control.value !== value;
+        control.value = value;
+        if (changed && emitChange) control.dispatchEvent(new Event("change"));
+        return;
+      }
       const option = root.querySelector<HTMLButtonElement>(`[data-select-option="${name}"][data-value="${value}"]`);
       if (!option) return;
       const changed = control.value !== value;
@@ -984,11 +994,34 @@ export default class NoospherePlugin extends Plugin {
       action("templateTab").classList.toggle("is-active", perspectiveTab === "template");
     };
     let displayedProvider: ProviderId = this.settings.activeProvider;
+    const providerIds = (): ProviderId[] => [...PROVIDER_ORDER, ...customProviders.map(item => item.id)];
+    /** 供应商列表只使用文本节点，用户命名不会成为 HTML。 */
+    const renderProviderList = (): void => {
+      const list = role("providerList");
+      list.replaceChildren();
+      for (const id of providerIds()) {
+        const info = providerInfo(id, customProviders);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.providerId = id;
+        button.setAttribute("aria-pressed", String(id === displayedProvider));
+        button.disabled = busy;
+        const mark = document.createElement("span");
+        mark.className = `noosphere__provider-mark noosphere__provider-mark--${isCustomProvider(id) ? "custom" : id}`;
+        mark.textContent = providerMark(id, info.label);
+        mark.setAttribute("aria-hidden", "true");
+        const name = document.createElement("span");
+        name.textContent = info.label;
+        button.append(mark, name);
+        button.addEventListener("click", () => { if (!busy) setDropdown("modelProvider", id); });
+        list.append(button);
+      }
+    };
     const renderImageProviderOptions = (): void => {
       modelProfiles[displayedProvider] = currentProfile();
       const menu = root.querySelector<HTMLElement>('[data-dropdown="imageProvider"] .noosphere__dropdown-menu')!;
       menu.querySelectorAll('[data-dynamic-image="true"]').forEach(option => option.remove());
-      for (const id of PROVIDER_ORDER) {
+      for (const id of providerIds()) {
         if (!modelProfiles[id]?.modelVisionCapable) continue;
         const option = document.createElement("button");
         option.type = "button";
@@ -996,7 +1029,7 @@ export default class NoospherePlugin extends Plugin {
         option.dataset.selectOption = "imageProvider";
         option.dataset.value = id;
         option.dataset.dynamicImage = "true";
-        option.textContent = PROVIDER_PRESETS[id].label;
+        option.textContent = providerInfo(id, customProviders).label;
         menu.append(option);
       }
       if (imageProvider.value && !modelProfiles[imageProvider.value as ProviderId]?.modelVisionCapable) setDropdown("imageProvider", "");
@@ -1004,15 +1037,16 @@ export default class NoospherePlugin extends Plugin {
     };
     const renderProviderView = (): void => {
       const id = modelProvider.value as ProviderId;
-      const preset = PROVIDER_PRESETS[id];
-      const info = root.querySelector<HTMLElement>('[data-role="providerDescription"]')!;
+      const preset = providerInfo(id, customProviders);
+      const custom = isCustomProvider(id);
+      const info = role("providerDescription");
       info.replaceChildren();
       const mark = document.createElement("span");
-      mark.className = `noosphere__provider-mark noosphere__provider-mark--${id}`;
-      mark.textContent = ({ kimi_api: "K", kimi_code: "C", volcengine: "火", minimax: "M", zhipu: "智", openai: "O", anthropic: "A", google: "G", custom: "+" } as Record<ProviderId, string>)[id];
+      mark.className = `noosphere__provider-mark noosphere__provider-mark--${custom ? "custom" : id}`;
+      mark.textContent = providerMark(id, preset.label);
       mark.setAttribute("aria-hidden", "true");
-      const text = document.createElement("span");
-      text.textContent = preset.description;
+      const text = document.createElement("strong");
+      text.textContent = preset.label;
       info.append(mark, text);
       if (preset.keyUrl) {
         const link = document.createElement("a");
@@ -1022,19 +1056,27 @@ export default class NoospherePlugin extends Plugin {
         link.textContent = "获取 API Key ↗";
         info.append(link);
       }
-      root.querySelector<HTMLDetailsElement>('[data-role="providerAdvanced"]')!.open = id === "custom";
+      role("providerName").hidden = !custom;
+      field<HTMLInputElement>("providerName").value = custom ? preset.label : "";
+      action("deleteProvider").hidden = !custom;
+      action("deleteProvider").dataset.confirm = "";
+      action("deleteProvider").textContent = "删除供应商";
+      root.querySelector<HTMLDetailsElement>('[data-role="providerAdvanced"]')!.open = custom;
       modelResults.hidden = true;
       modelOptions.replaceChildren();
+      renderProviderList();
       renderImageProviderOptions();
     };
     /** Rebuild setup from the last saved settings without clearing the current article. */
     const restoreSetup = (saved: Settings): void => {
       customPerspectives = saved.customPerspectives.map(item => ({ ...item }));
-      for (const id of PROVIDER_ORDER) delete modelProfiles[id];
-      for (const id of PROVIDER_ORDER) {
-        const profile = saved.modelProfiles[id];
-        if (profile) modelProfiles[id] = { ...profile };
+      customProviders = saved.customProviders.map(item => ({ ...item }));
+      for (const id of Object.keys(modelProfiles)) delete modelProfiles[id as ProviderId];
+      for (const [id, profile] of Object.entries(saved.modelProfiles)) {
+        if (profile) modelProfiles[id as ProviderId] = { ...profile };
       }
+      role("providerCreator").hidden = true;
+      setDropdown("outputLanguage", saved.outputLanguage, false);
       field<HTMLInputElement>("firecrawlKey").value = saved.firecrawlKey;
       setDropdown("modelProvider", saved.activeProvider, false);
       displayedProvider = saved.activeProvider;
@@ -1077,6 +1119,52 @@ export default class NoospherePlugin extends Plugin {
       syncSecretPreview(keyInput);
       field<HTMLInputElement>("modelName").value = next.modelName;
       modelVisionCapable.checked = next.modelVisionCapable;
+      renderProviderView();
+    });
+    action("addProvider").addEventListener("click", () => {
+      role("providerCreator").hidden = false;
+      role("providerError").hidden = true;
+      field<HTMLInputElement>("newProviderName").value = "";
+      field<HTMLInputElement>("newProviderName").focus();
+    });
+    action("cancelProvider").addEventListener("click", () => { role("providerCreator").hidden = true; });
+    action("createProvider").addEventListener("click", () => {
+      if (busy) return;
+      try {
+        const label = validateProviderName(field<HTMLInputElement>("newProviderName").value, customProviders);
+        const id: ProviderId = `custom_${crypto.randomUUID()}`;
+        customProviders.push({ id, label });
+        setDropdown("modelProvider", id);
+        role("providerCreator").hidden = true;
+      } catch (error) {
+        role("providerError").textContent = error instanceof Error ? error.message : String(error);
+        role("providerError").hidden = false;
+      }
+    });
+    field<HTMLInputElement>("providerName").addEventListener("change", () => {
+      const provider = customProviders.find(item => item.id === displayedProvider);
+      if (!provider || busy) return;
+      try {
+        provider.label = validateProviderName(field<HTMLInputElement>("providerName").value, customProviders, provider.id);
+        renderProviderView();
+      } catch (error) {
+        field<HTMLInputElement>("providerName").value = provider.label;
+        showMessage(error instanceof Error ? error.message : String(error), 5000, "error");
+      }
+    });
+    action("deleteProvider").addEventListener("click", () => {
+      const id = displayedProvider;
+      if (busy || !isCustomProvider(id)) return;
+      if (action("deleteProvider").dataset.confirm !== id) {
+        action("deleteProvider").dataset.confirm = id;
+        action("deleteProvider").textContent = "确认删除";
+        return;
+      }
+      // 先切回内置供应商，再清除旧配置，避免切换事件重新写回已删除密钥。
+      setDropdown("modelProvider", "kimi_api");
+      customProviders = customProviders.filter(item => item.id !== id);
+      delete modelProfiles[id];
+      if (imageProvider.value === id) setDropdown("imageProvider", "");
       renderProviderView();
     });
     modelVisionCapable.addEventListener("change", () => {
@@ -1134,7 +1222,7 @@ export default class NoospherePlugin extends Plugin {
     });
     modelFormat.addEventListener("change", () => {
       const current = field<HTMLInputElement>("modelBaseUrl");
-      if (!current.value.trim()) current.value = PROVIDER_PRESETS[modelProvider.value as ProviderId].modelBaseUrl;
+      if (!current.value.trim()) current.value = providerInfo(modelProvider.value as ProviderId, customProviders).modelBaseUrl;
       modelResults.hidden = true;
       modelOptions.replaceChildren();
     });
@@ -1170,8 +1258,7 @@ export default class NoospherePlugin extends Plugin {
       persistDraft();
       updateActions();
     });
-    outputLanguage.addEventListener("change", () => { setDropdown("workOutputLanguage", outputLanguage.value, false); persistDraft(); });
-    workOutputLanguage.addEventListener("change", () => { setDropdown("outputLanguage", workOutputLanguage.value, false); persistDraft(); });
+    workOutputLanguage.addEventListener("change", () => { persistDraft(); });
     renderPerspectiveOptions();
     for (const [name, value] of [["modelFormat", this.settings.modelFormat], ["modelProvider", this.settings.activeProvider], ["reviewPerspective", workPerspective.value], ["workPerspective", workPerspective.value]]) setDropdown(name, value, false);
     refreshPerspectiveEditor();
@@ -1264,6 +1351,7 @@ export default class NoospherePlugin extends Plugin {
         if (this.uninstalled) throw new Error("知流已卸载");
         progressPanel.hidden = true;
         article = nextArticle; editorState = undefined; bodyEdited = false;
+        setDropdown("workOutputLanguage", settings.outputLanguage, false);
         target.value = ""; savedDocumentId = ""; savedContentChanged = false;
         reviewedMarkdown = "";
         imageDecisions = [];
@@ -1352,7 +1440,7 @@ export default class NoospherePlugin extends Plugin {
         };
         // 人工编辑后从当前处理稿审阅，未编辑的文章继续使用完整抓取原文。
         const reviewInput = bodyEdited ? markdown.value : article.markdown;
-        const result = await reviewArticleDetailed(article, settings, reviewInput, {
+        const result = await reviewArticleDetailed(article, { ...settings, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value) }, reviewInput, {
           signal, onTextReviewed: acceptText, onImageProgress: progress => { throwIfCancelled(signal); acceptImageProgress(progress); },
           onStreamActivity: () => currentPlayback.observeArrival(),
           onTextDelta: response => {

@@ -167,6 +167,7 @@
 .noosphere__field-label { display:block; }
 .noosphere__dropdown { position:relative; min-width:0; }
 .noosphere__dropdown-trigger { display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; min-height:39px; padding:7px 11px; border:1px solid var(--ns-border); border-radius:7px; background:var(--b3-theme-background); color:var(--b3-theme-on-background); text-align:left; cursor:pointer; font:inherit; }
+.noosphere__dropdown-trigger > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .noosphere__chevron { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 .noosphere__dropdown-trigger[aria-expanded="true"] .noosphere__chevron { transform:rotate(180deg); }
 .noosphere__dropdown-trigger:hover, .noosphere__dropdown-trigger[aria-expanded="true"] { border-color:var(--ns-accent); }
@@ -205,9 +206,21 @@
 .noosphere__prompt-tabs button.is-active { border-bottom-color:var(--ns-accent); color:var(--ns-accent); font-weight:650; }
 .noosphere__perspective-textarea { display:block; width:100%; min-height:260px; margin-top:12px; padding:14px; resize:vertical; font-family:var(--b3-font-family-code,monospace); font-size:15px; line-height:1.65; }
 .noosphere__perspective-textarea[readonly] { background:var(--ns-soft); opacity:1; cursor:text; }
-.noosphere__provider-top { display:grid; grid-template-columns:minmax(240px,360px) 1fr; align-items:end; gap:18px; padding:15px 17px; border:1px solid var(--ns-border); border-radius:10px; background:var(--ns-soft); }
-.noosphere__provider-top .noosphere__field { margin:0; }
-.noosphere__provider-top p { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:0 0 8px; color:var(--b3-theme-on-surface); font-size:14px; }
+.noosphere__provider-heading,.noosphere__provider-identity { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.noosphere__provider-heading { margin:0 0 12px; }
+.noosphere__provider-heading h4 { margin:0; font-size:15px; }
+.noosphere__provider-create { display:flex; flex-wrap:wrap; align-items:end; gap:10px; padding:14px; margin-bottom:12px; border:1px solid var(--ns-border); border-radius:10px; background:var(--ns-soft); }
+.noosphere__provider-create label { flex:1; min-width:180px; margin:0; }
+.noosphere__provider-create p { flex-basis:100%; margin:0; color:var(--b3-theme-error); }
+.noosphere__provider-workspace { display:grid; grid-template-columns:190px minmax(0,1fr); gap:18px; }
+.noosphere__provider-list { display:flex; flex-direction:column; gap:5px; max-height:480px; overflow:auto; padding:6px; border:1px solid var(--ns-border); border-radius:10px; background:var(--ns-soft); }
+.noosphere__provider-list button { display:flex; align-items:center; gap:9px; width:100%; min-height:44px; padding:7px; border:1px solid transparent; border-radius:8px; background:transparent; color:inherit; text-align:left; font:inherit; cursor:pointer; }
+.noosphere__provider-list button > span:last-child { min-width:0; overflow-wrap:anywhere; }
+.noosphere__provider-list button[aria-pressed="true"] { border-color:var(--ns-accent); background:var(--b3-theme-background); }
+.noosphere__provider-detail { min-width:0; }
+.noosphere__provider-identity { flex-wrap:wrap; }
+.noosphere__provider-identity p { display:flex; flex-wrap:wrap; align-items:center; gap:10px; min-width:0; margin:0; font-size:14px; }
+.noosphere__provider-identity strong { overflow-wrap:anywhere; }
 .noosphere__provider-mark { display:grid; flex:none; place-items:center; width:32px; height:32px; border-radius:9px; background:#e7ecfa; color:#3b5d9e; font-size:16px; font-weight:750; }
 .noosphere__provider-mark--kimi_api,.noosphere__provider-mark--kimi_code { background:#eee9fc; color:#684da7; }
 .noosphere__provider-mark--volcengine { background:#fff0e9; color:#c45b37; }
@@ -215,18 +228,20 @@
 .noosphere__provider-mark--zhipu { background:#e9f1ff; color:#345fb2; }
 .noosphere__provider-mark--anthropic { background:#f4eee7; color:#8a6547; }
 .noosphere__provider-mark--google { background:#e9f4ed; color:#377d55; }
-.noosphere__provider-fields { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; margin-top:6px; }
+.noosphere__provider-fields { display:grid; grid-template-columns:minmax(0,1fr); gap:0 16px; margin-top:6px; }
 .noosphere__provider-fields > label { min-width:0; }
 .noosphere__provider-fields .noosphere__model-results,.noosphere__provider-fields .noosphere__vision-option,.noosphere__provider-fields .noosphere__advanced { grid-column:1 / -1; }
 .noosphere__provider-fields .noosphere__vision-option { margin-top:14px !important; }
 .noosphere__advanced { margin-top:15px; padding:10px 13px; border:1px solid var(--ns-border); border-radius:8px; }
 .noosphere__advanced summary { cursor:pointer; color:var(--ns-accent); font-size:14px; font-weight:650; }
+.noosphere__advanced > .noosphere__field { width:100%; }
+.noosphere__advanced [data-dropdown="modelFormat"] { max-width:100%; }
 .noosphere__advanced p { margin:8px 0 0; color:var(--b3-theme-on-surface); font-size:13px; }
 .noosphere__image-provider { margin-top:16px; padding-top:15px; border-top:1px solid var(--ns-border); }
 .noosphere__image-provider .noosphere__field { max-width:360px; margin:0; }
 .noosphere__image-provider p { margin:7px 0 0; color:var(--b3-theme-on-surface); font-size:13px; line-height:1.55; }
 .noosphere__format-editor textarea { min-height:390px; margin-top:12px; }
-@media (max-width:760px) { .noosphere__perspective-heading { flex-wrap:wrap; } .noosphere__perspective-meta,.noosphere__provider-fields,.noosphere__provider-top { grid-template-columns:1fr; } }
+@media (max-width:760px) { .noosphere__perspective-heading { flex-wrap:wrap; } .noosphere__perspective-meta,.noosphere__provider-fields,.noosphere__provider-workspace { grid-template-columns:1fr; } .noosphere__provider-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); max-height:210px; } }
 @media (max-width:540px) { .noosphere__model-row { flex-wrap:wrap; } .noosphere__model-row > button { width:100%; } }
 .noosphere__vision-option { display:flex !important; align-items:center; gap:9px; margin:0 !important; font-size:14px !important; cursor:pointer; }
 .noosphere__vision-option input { width:16px; height:16px; accent-color:var(--ns-accent); }

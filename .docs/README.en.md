@@ -31,6 +31,8 @@ Capture new articles at the top, read and edit the body on the left, and review 
 4. Optionally choose a review perspective and output language on the right, then start AI review. Click an image thumbnail to inspect it and select its checkbox to remove it.
 5. Copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
 
+The default article output language in Settings applies to newly captured articles and initially follows the SiYuan interface. The workbench language applies only to the current article and is retained in its history. You can add, rename and delete named custom providers with separate credentials and models; built-in providers cannot be deleted.
+
 The plugin creates no draft documents, notebooks or folders. Each article keeps its own destination choice. Saving changed content to an existing document appends another import; it does not synchronize with an earlier import.
 
 Changes between versions are recorded in the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md).

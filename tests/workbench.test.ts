@@ -98,6 +98,74 @@ describe("workbench regression", () => {
   });
   afterEach(() => { fixtures.dialogs.at(-1)?.destroy(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
+  it("creates, renames and deletes custom providers while preserving independent credentials", async () => {
+    await launch(); click("toggleSettings");
+    const selectProvider = (id: string): void => document.querySelector<HTMLButtonElement>(`[data-provider-id="${id}"]`)!.click();
+    expect(document.querySelector('[data-role="providerList"]')!.textContent).toContain("Kimi Code");
+    selectProvider("kimi_api");
+    expect(document.querySelector<HTMLElement>('[data-action="deleteProvider"]')!.hidden).toBe(true);
+    click("deleteProvider");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value).toBe("kimi_api");
+    input("modelKey", "builtin-secret");
+    click("addProvider"); input("newProviderName", "alpha gateway"); click("createProvider");
+    const first = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    expect(first).toMatch(/^custom_/);
+    input("modelKey", "first-secret"); input("modelName", "first-model");
+    const vision = document.querySelector<HTMLInputElement>('[data-field="modelVisionCapable"]')!;
+    vision.checked = true; vision.dispatchEvent(new Event("change"));
+    expect(document.querySelector<HTMLInputElement>('[data-field="imageProvider"]')!.value).toBe(first);
+    input("providerName", "renamed gateway");
+    document.querySelector('[data-field="providerName"]')!.dispatchEvent(new Event("change"));
+    expect(document.querySelector(`[data-provider-id="${first}"] .noosphere__provider-mark`)!.textContent).toBe("RE");
+    click("addProvider"); input("newProviderName", "beta"); click("createProvider");
+    const second = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    input("modelKey", "second-secret");
+    selectProvider(first);
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("first-secret");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelName"]')!.value).toBe("first-model");
+    click("settings"); await ready();
+    fixtures.dialogs.at(-1)!.destroy(); await launch(); click("toggleSettings");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value).toBe(first);
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("first-secret");
+    expect(document.querySelector('[data-role="providerList"]')!.textContent).toContain("renamed gateway");
+    click("deleteProvider"); click("deleteProvider");
+    expect(document.querySelector(`[data-provider-id="${first}"]`)).toBeNull();
+    expect(document.querySelector<HTMLInputElement>('[data-field="imageProvider"]')!.value).toBe("");
+    selectProvider(second);
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("second-secret");
+    selectProvider("kimi_api");
+    expect(document.querySelector<HTMLInputElement>('[data-field="modelKey"]')!.value).toBe("builtin-secret");
+    click("settings"); await ready();
+    const saved = fixtures.files.get("settings.json") as import("../src/types").Settings;
+    expect(saved.modelProfiles[first as import("../src/review/providers").ProviderId]).toBeUndefined();
+    expect(saved.customProviders.map(item => item.id)).toEqual(expect.arrayContaining([second]));
+    expect(saved.customProviders.some(item => item.id === first)).toBe(false);
+  });
+
+  it("discards unsaved provider additions and rejects duplicate names", async () => {
+    await launch(); click("toggleSettings");
+    click("addProvider"); input("newProviderName", "Kimi API"); click("createProvider");
+    expect(document.querySelector('[data-role="providerError"]')!.textContent).toContain("已存在");
+    input("newProviderName", "temporary"); click("createProvider");
+    const id = document.querySelector<HTMLInputElement>('[data-field="modelProvider"]')!.value;
+    click("toggleSettings"); fixtures.confirm.mock.calls.at(-1)![2]();
+    click("toggleSettings");
+    expect(document.querySelector(`[data-provider-id="${id}"]`)).toBeNull();
+  });
+
+  it("uses the language default for new articles without changing it from the workbench", async () => {
+    await launch(); click("toggleSettings");
+    document.querySelector<HTMLButtonElement>('[data-select-option="outputLanguage"][data-value="en-US"]')!.click();
+    click("settings"); await ready(); await scrape();
+    expect(stored().outputLanguage).toBe("en-US");
+    document.querySelector<HTMLButtonElement>('[data-select-option="workOutputLanguage"][data-value="zh-CN"]')!.click();
+    expect(document.querySelector<HTMLInputElement>('[data-field="outputLanguage"]')!.value).toBe("en-US");
+    await vi.waitFor(() => expect(stored().outputLanguage).toBe("zh-CN"));
+    await scrape();
+    expect(stored().outputLanguage).toBe("en-US");
+    expect((fixtures.files.get("settings.json") as import("../src/types").Settings).outputLanguage).toBe("en-US");
+  });
+
   it("requires an explicit destination and offers no current-document shortcut", async () => {
     await launch(); await scrape();
     expect(document.querySelector('[data-action="current"]')).toBeNull();
@@ -660,11 +728,11 @@ describe("workbench regression", () => {
   it("remembers output language with each article and passes it to the review", async () => {
     await launch();
     const choose = (language: string): void => document.querySelector<HTMLButtonElement>(`[data-select-option="workOutputLanguage"][data-value="${language}"]`)!.click();
-    choose("en-US"); await scrape(); await scrape(); choose("zh-CN");
+    await scrape(); choose("en-US"); await scrape(); choose("zh-CN");
     click("showHistory"); historyAction("view", 1);
     expect(document.querySelector<HTMLInputElement>('[data-field="workOutputLanguage"]')!.value).toBe("en-US");
     expect(document.querySelector('[data-select-label="workOutputLanguage"]')!.textContent).toBe("英文");
-    expect(document.querySelector<HTMLInputElement>('[data-field="outputLanguage"]')!.value).toBe("en-US");
+    expect(document.querySelector<HTMLInputElement>('[data-field="outputLanguage"]')!.value).toBe("follow_ui");
     fixtures.dialogs.at(-1)!.destroy(); await launch();
     vi.mocked(reviewArticleDetailed).mockResolvedValueOnce({ article, markdown: "English result", summary: "summary", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] });
     click("review"); await ready();
