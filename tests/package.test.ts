@@ -24,8 +24,9 @@ it("maps local documentation paths without rewriting the GitHub Raw image URL", 
     expect(await readFile(join(root, "dist/README.md"), "utf8")).toBe(source.replace("(.docs/", "(docs/").replace("(.project/", "(project/"));
     expect(await readFile(join(root, "dist/docs/README.en.md"), "utf8")).toBe(english.replace("(../.project/", "(../project/"));
     for (const path of Object.values(manifest.readme) as string[]) expect(await readFile(join(root, "dist", path), "utf8")).toContain(imageURL);
-    expect(await readFile(join(root, "dist/icon.png"))).toEqual(icon);
-    expect(await readFile(join(root, "dist/docs/images/workbench.png"))).toEqual(image);
+    // 使用原生字节比较，避免测试框架逐项遍历大图导致 CI 超时。
+    expect((await readFile(join(root, "dist/icon.png"))).equals(icon)).toBe(true);
+    expect((await readFile(join(root, "dist/docs/images/workbench.png"))).equals(image)).toBe(true);
     expect(await readFile(join(root, "dist/project/development.md"), "utf8")).toBe("[英文](../docs/README.en.md)");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
