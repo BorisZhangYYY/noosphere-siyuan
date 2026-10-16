@@ -71,7 +71,7 @@ export default class NoospherePlugin extends Plugin {
     const customPerspectives = Array.isArray(saved?.customPerspectives)
       ? saved.customPerspectives.filter(item => item && item.id !== "legacy_guidance" && /^[a-z0-9_-]+$/.test(item.id)).map(migratePerspective)
       : [];
-    this.settings = { ...DEFAULT_SETTINGS, ...(saved || {}), ...restoreProviders(saved), outputLanguage: normalizeOutputLanguage(saved?.outputLanguage), reviewPerspective: saved?.reviewPerspective && saved.reviewPerspective !== "raw" && saved.reviewPerspective !== "legacy_guidance" ? saved.reviewPerspective : "original", customPerspectives };
+    this.settings = { ...DEFAULT_SETTINGS, ...(saved || {}), ...restoreProviders(saved), outputLanguage: "follow_ui", reviewPerspective: saved?.reviewPerspective && saved.reviewPerspective !== "raw" && saved.reviewPerspective !== "legacy_guidance" ? saved.reviewPerspective : "original", customPerspectives };
     let recovery: Storage | undefined;
     try { recovery = window.localStorage; } catch { /* 浏览器不允许本地缓存时仍保存到思源。 */ }
     const workspaceId = (window as unknown as { siyuan?: { config?: { system?: { workspaceDir?: string } } } }).siyuan?.config?.system?.workspaceDir || window.location.origin;
@@ -290,7 +290,6 @@ export default class NoospherePlugin extends Plugin {
     const sourcePublished = field<HTMLInputElement>("sourcePublished");
     const setupPerspective = field<HTMLInputElement>("reviewPerspective");
     const workPerspective = field<HTMLInputElement>("workPerspective");
-    const outputLanguage = field<HTMLInputElement>("outputLanguage");
     const workOutputLanguage = field<HTMLInputElement>("workOutputLanguage");
     const modelProvider = field<HTMLInputElement>("modelProvider");
     const imageProvider = field<HTMLInputElement>("imageProvider");
@@ -318,8 +317,7 @@ export default class NoospherePlugin extends Plugin {
     imageProvider.value = this.settings.imageProvider;
     setupPerspective.value = this.settings.reviewPerspective;
     workPerspective.value = draft?.perspective || this.settings.reviewPerspective;
-    outputLanguage.value = normalizeOutputLanguage(this.settings.outputLanguage);
-    workOutputLanguage.value = normalizeOutputLanguage(draft?.outputLanguage || this.settings.outputLanguage);
+    workOutputLanguage.value = normalizeOutputLanguage(draft?.outputLanguage);
     let customProviders = this.settings.customProviders.map(item => ({ ...item }));
     let customPerspectives: ReviewPerspective[] = this.settings.customPerspectives.map(item => ({ ...item }));
     const modelProfiles: Settings["modelProfiles"] = { ...this.settings.modelProfiles };
@@ -553,7 +551,7 @@ export default class NoospherePlugin extends Plugin {
         || customPerspectives.some(item => item.id === restored.perspective) ? restored.perspective : "original";
       setDropdown("workPerspective", perspective, false);
       setDropdown("reviewPerspective", perspective, false);
-      const language = normalizeOutputLanguage(restored.outputLanguage || this.settings.outputLanguage);
+      const language = normalizeOutputLanguage(restored.outputLanguage);
       setDropdown("workOutputLanguage", language, false);
       progressPanel.hidden = true;
       selectedImage = undefined;
@@ -739,7 +737,7 @@ export default class NoospherePlugin extends Plugin {
       return {
         topBarPosition: this.settings.topBarPosition,
         reviewPerspective: workPerspective.value,
-        outputLanguage: normalizeOutputLanguage(outputLanguage.value),
+        outputLanguage: "follow_ui",
         firecrawlKey: field("firecrawlKey").value.trim(),
         ...profile,
         activeProvider,
@@ -757,7 +755,9 @@ export default class NoospherePlugin extends Plugin {
     const saveSettings = async (): Promise<Settings> => {
       const next = readSettings();
       for (const perspective of next.customPerspectives) validatePerspective(perspective);
-      const result = await this.saveOwnedData(STORAGE_NAME, next) as { code?: number; msg?: string };
+      // 文章语言只随草稿和历史保留，保存设置时移除旧版全局默认值。
+      const { outputLanguage: _outputLanguage, ...storedSettings } = next;
+      const result = await this.saveOwnedData(STORAGE_NAME, storedSettings) as { code?: number; msg?: string };
       if (this.uninstalled) throw new Error("知流已卸载");
       if (result?.code !== 0) throw new Error(result?.msg || "配置保存失败");
       this.settings = next;
@@ -1075,7 +1075,6 @@ export default class NoospherePlugin extends Plugin {
         if (profile) modelProfiles[id as ProviderId] = { ...profile };
       }
       role("providerCreator").hidden = true;
-      setDropdown("outputLanguage", saved.outputLanguage, false);
       field<HTMLInputElement>("firecrawlKey").value = saved.firecrawlKey;
       setDropdown("modelProvider", saved.activeProvider, false);
       displayedProvider = saved.activeProvider;
@@ -1346,11 +1345,13 @@ export default class NoospherePlugin extends Plugin {
       void run("抓取", async () => {
         const settings = await saveSettings();
         if (!settings.firecrawlKey) { showView("setup"); throw new Error("请先配置 Firecrawl API Key"); }
+        // 空白工作台允许先选语言；从已有文章开始新抓取时恢复界面语言默认值。
+        const language = article ? "follow_ui" : normalizeOutputLanguage(workOutputLanguage.value);
         const nextArticle = await scrapeWithFirecrawl(inputUrl.value, settings.firecrawlKey);
         if (this.uninstalled) throw new Error("知流已卸载");
         progressPanel.hidden = true;
         article = nextArticle; editorState = undefined; bodyEdited = false;
-        setDropdown("workOutputLanguage", settings.outputLanguage, false);
+        setDropdown("workOutputLanguage", language, false);
         target.value = ""; savedDocumentId = ""; savedContentChanged = false;
         reviewedMarkdown = "";
         imageDecisions = [];
@@ -1534,7 +1535,7 @@ export default class NoospherePlugin extends Plugin {
       openTab({ app: this.app, doc: { id: savedDocumentId } });
       dialog.destroy();
     });
-    setDropdown("outputLanguage", outputLanguage.value, false); setDropdown("workOutputLanguage", workOutputLanguage.value, false);
+    setDropdown("workOutputLanguage", workOutputLanguage.value, false);
     setupBaseline = cloneSettings(readSettings());
     if (draft && repairImageChoices(draft.imageDecisions)) persistDraft();
     renderArticle();

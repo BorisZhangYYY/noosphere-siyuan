@@ -153,17 +153,21 @@ describe("workbench regression", () => {
     expect(document.querySelector(`[data-provider-id="${id}"]`)).toBeNull();
   });
 
-  it("uses the language default for new articles without changing it from the workbench", async () => {
-    await launch(); click("toggleSettings");
-    document.querySelector<HTMLButtonElement>('[data-select-option="outputLanguage"][data-value="en-US"]')!.click();
-    click("settings"); await ready(); await scrape();
-    expect(stored().outputLanguage).toBe("en-US");
+  it("keeps language selection only in the workbench and ignores the old global default", async () => {
+    fixtures.files.set("settings.json", { ...fixtures.files.get("settings.json") as object, outputLanguage: "en-US" });
+    await launch();
+    expect(document.querySelector('[data-field="outputLanguage"]')).toBeNull();
+    expect(document.querySelector<HTMLInputElement>('[data-field="workOutputLanguage"]')!.value).toBe("follow_ui");
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('[data-select-option="workOutputLanguage"]'), option => option.dataset.value)).toEqual(["follow_ui", "source", "zh-CN", "en-US"]);
+    // 空白工作台可以先选再抓取；下一篇文章不会继承上一份语言选择。
+    document.querySelector<HTMLButtonElement>('[data-select-option="workOutputLanguage"][data-value="source"]')!.click();
+    await scrape();
+    expect(stored().outputLanguage).toBe("source");
     document.querySelector<HTMLButtonElement>('[data-select-option="workOutputLanguage"][data-value="zh-CN"]')!.click();
-    expect(document.querySelector<HTMLInputElement>('[data-field="outputLanguage"]')!.value).toBe("en-US");
     await vi.waitFor(() => expect(stored().outputLanguage).toBe("zh-CN"));
     await scrape();
-    expect(stored().outputLanguage).toBe("en-US");
-    expect((fixtures.files.get("settings.json") as import("../src/types").Settings).outputLanguage).toBe("en-US");
+    expect(stored().outputLanguage).toBe("follow_ui");
+    expect(fixtures.files.get("settings.json")).not.toHaveProperty("outputLanguage");
   });
 
   it("requires an explicit destination and offers no current-document shortcut", async () => {
@@ -732,7 +736,7 @@ describe("workbench regression", () => {
     click("showHistory"); historyAction("view", 1);
     expect(document.querySelector<HTMLInputElement>('[data-field="workOutputLanguage"]')!.value).toBe("en-US");
     expect(document.querySelector('[data-select-label="workOutputLanguage"]')!.textContent).toBe("英文");
-    expect(document.querySelector<HTMLInputElement>('[data-field="outputLanguage"]')!.value).toBe("follow_ui");
+    expect(document.querySelector('[data-field="outputLanguage"]')).toBeNull();
     fixtures.dialogs.at(-1)!.destroy(); await launch();
     vi.mocked(reviewArticleDetailed).mockResolvedValueOnce({ article, markdown: "English result", summary: "summary", imageDecisions: [], imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] });
     click("review"); await ready();

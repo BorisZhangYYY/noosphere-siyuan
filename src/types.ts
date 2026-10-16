@@ -2,6 +2,7 @@
 export interface Settings {
   topBarPosition: "left" | "right";
   reviewPerspective: string;
+  /** 单次审阅的语言参数，不作为全局设置持久化。 */
   outputLanguage: import("./review/language").OutputLanguage;
   firecrawlKey: string;
   modelBaseUrl: string;

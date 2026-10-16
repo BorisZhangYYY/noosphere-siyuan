@@ -50,7 +50,6 @@ export function captureContent(): string {
           <label class="noosphere__vision-option"><input data-field="modelVisionCapable" type="checkbox"> 这个模型支持识图</label>
         </div>
         </div></div>
-        ${dropdown("outputLanguage", "默认文章输出语言", OUTPUT_LANGUAGE_OPTIONS)}<p class="noosphere__field-help">用于新抓取的文章；当前文章可在工作台单独调整。</p>
         <div class="noosphere__image-provider">${dropdown("imageProvider", "图片审阅模型", [["", "关闭图片审阅"]])}<p>可从已标记“支持识图”的供应商中选择；与文字审阅模型可以不同。识别失败的图片会保留。</p></div>
         <section class="noosphere__perspective-editor"><div class="noosphere__perspective-heading"><div><h4>审阅视角与文章格式</h4><p>新增视角后，像给编辑提要求一样描述文章结构。</p></div><div class="noosphere__perspective-buttons"><button data-action="addPerspective" class="b3-button b3-button--outline" type="button">新增视角</button><button data-action="deletePerspective" class="b3-button b3-button--outline" type="button" hidden>删除视角</button></div></div>
           ${dropdown("reviewPerspective", "", perspectiveOptions)}
