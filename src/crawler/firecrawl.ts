@@ -2,6 +2,7 @@
 import { proxyRequest } from "../siyuan/api";
 import type { Article } from "../types";
 import { stripArticleImagePlaceholders } from "../images/reference";
+import { buildScrapePayload, canonicalArticleUrl } from "./platform";
 
 interface FirecrawlResult {
   success?: boolean;
@@ -24,12 +25,12 @@ export function parseArticleUrl(raw: string): URL {
 /** Return a normalized Markdown article and its source metadata. */
 export async function scrapeWithFirecrawl(rawUrl: string, apiKey: string): Promise<Article> {
   if (!apiKey.trim()) throw new Error("请先填写 Firecrawl API Key");
-  const url = parseArticleUrl(rawUrl);
+  const url = canonicalArticleUrl(parseArticleUrl(rawUrl));
   const response = await proxyRequest(
     "https://api.firecrawl.dev/v2/scrape",
     "POST",
     { Authorization: `Bearer ${apiKey.trim()}` },
-    { url: url.href, formats: ["markdown"], onlyMainContent: true },
+    buildScrapePayload(url),
   );
   const result = JSON.parse(response.body) as FirecrawlResult;
   if (result.success === false || !result.data?.markdown?.trim()) {

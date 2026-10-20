@@ -4,6 +4,7 @@ export function sourcePlatform(rawUrl: string): string {
     const host = new URL(rawUrl).hostname.toLocaleLowerCase();
     if (host === "mp.weixin.qq.com") return "微信公众号";
     if (/(^|\.)zhihu\.com$/.test(host)) return "知乎";
+    if (/(^|\.)xiaoheihe\.cn$/.test(host)) return "小黑盒";
     return host;
   } catch { return rawUrl; }
 }
