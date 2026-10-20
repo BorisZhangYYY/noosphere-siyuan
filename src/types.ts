@@ -15,7 +15,13 @@ export interface Settings {
   modelVisionCapable: boolean;
   customPerspectives: ReviewPerspective[];
   targetDocumentId: string;
+  /** 分类根文档：自动分类落库的兜底位置，也是分类文档的父级。 */
+  rootDocumentId: string;
+  /** 手动指定文档保持原有追加语义；自动分类由 AI 选分类后按标题落库。 */
+  saveMode: SaveMode;
 }
+
+export type SaveMode = "manual" | "auto";
 
 export interface ReviewPerspective {
   id: string;
@@ -59,4 +65,6 @@ export const DEFAULT_SETTINGS: Settings = {
   modelVisionCapable: false,
   customPerspectives: [],
   targetDocumentId: "",
+  rootDocumentId: "",
+  saveMode: "manual",
 };

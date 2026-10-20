@@ -7,6 +7,9 @@ import { localizeMarkdownImages, replaceImageAssetRefs } from "./images/localize
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
 import { presetProfile, PROVIDER_ORDER, PROVIDER_PRESETS, restoreProviders, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
+import { ensureArticleDocument } from "./siyuan/destination";
+import { discoverCategories, refreshCategoryIndex } from "./siyuan/tree";
+import { classifyArticle, type ClassificationResult } from "./review/classify";
 import { removePluginStorage } from "./siyuan/cleanup";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
 import { captureContent } from "./ui";
@@ -286,6 +289,32 @@ export default class NoospherePlugin extends Plugin {
     const imageDecisionCount = root.querySelector<HTMLElement>('[data-role="imageDecisionCount"]')!;
     const inputUrl = field<HTMLInputElement>("url");
     const target = field<HTMLInputElement>("targetDocumentId");
+    const rootDocument = field<HTMLInputElement>("rootDocumentId");
+    /** 保存方式随文章走；设置里的 saveMode 只是新文章的初值。 */
+    const saveMode = (): Settings["saveMode"] =>
+      (root.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="auto"]')?.checked ? "auto" : "manual");
+    let classification: CaptureDraft["classification"] = draft?.classification;
+    const setSaveMode = (mode: Settings["saveMode"]): void => {
+      const manual = root.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="manual"]')!;
+      const auto = root.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="auto"]')!;
+      manual.checked = mode === "manual";
+      auto.checked = mode === "auto";
+      renderSaveMode();
+    };
+    /** 自动分类时手动目标置灰但仍保留，切回手动可继续用原位置。 */
+    const renderSaveMode = (): void => {
+      const auto = saveMode() === "auto";
+      const find = (name: string): HTMLElement | null => root.querySelector<HTMLElement>(`[data-role="${name}"]`);
+      (find("targetField") as HTMLElement).hidden = auto;
+      (find("rootField") as HTMLElement).hidden = !auto;
+      const note = find("classifyNote") as HTMLElement;
+      note.hidden = !auto;
+      note.textContent = auto
+        ? classification
+          ? (classification.categoryId ? `上次归类：${classification.reason}` : `未归类到分类：${classification.reason}`)
+          : "审阅完成后由模型选择已有分类，文章作为新文档保存到该分类下。"
+        : "";
+    };
     const sourceAuthor = field<HTMLInputElement>("sourceAuthor");
     const sourcePublished = field<HTMLInputElement>("sourcePublished");
     const setupPerspective = field<HTMLInputElement>("reviewPerspective");
@@ -303,6 +332,8 @@ export default class NoospherePlugin extends Plugin {
       wrapper.classList.toggle("has-value", Boolean(input.value));
     };
     target.value = draft?.targetDocumentId || "";
+    rootDocument.value = draft?.rootDocumentId || this.settings.rootDocumentId || "";
+    setSaveMode(draft?.saveMode || this.settings.saveMode || "manual");
     inputUrl.value = draft?.url || "";
     markdown.value = draft?.markdown || "";
     for (const name of ["firecrawlKey", "modelBaseUrl", "modelKey", "modelName"] as const) {
@@ -312,6 +343,15 @@ export default class NoospherePlugin extends Plugin {
       syncSecretPreview(input);
       input.addEventListener("input", () => syncSecretPreview(input));
     });
+    root.querySelectorAll<HTMLInputElement>('input[data-field="saveMode"]').forEach(input => {
+      input.addEventListener("change", () => {
+        renderSaveMode();
+        markUnsaved();
+        persistDraft();
+        updateActions();
+      });
+    });
+    rootDocument.addEventListener("input", () => updateActions());
     modelFormat.value = this.settings.modelFormat;
     modelVisionCapable.checked = this.settings.modelVisionCapable;
     modelProvider.value = this.settings.activeProvider;
@@ -386,7 +426,7 @@ export default class NoospherePlugin extends Plugin {
       role("reviewInfo").hidden = !role("reviewInfo").textContent;
     };
     const snapshotDraft = (): CaptureDraft => ({ version: 1, updatedAt: Date.now(), url: inputUrl.value, article, markdown: markdown.value,
-      reviewedMarkdown, imageDecisions, targetDocumentId: target.value, perspective: workPerspective.value, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value), savedDocumentId, savedContentChanged, reviewInfo, textReviewed, historyId, bodyEdited,
+      reviewedMarkdown, imageDecisions, targetDocumentId: target.value, rootDocumentId: rootDocument.value, perspective: workPerspective.value, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value), savedDocumentId, savedContentChanged, reviewInfo, textReviewed, historyId, bodyEdited, saveMode: saveMode(), classification,
       editorState: editorState?.markdown === markdown.value ? editorState : undefined });
     /** 旧版本对重复图片的判断统一后，同步显示正文，保留人工编辑的原生格式。 */
     const repairImageChoices = (previous: ImageDecision[]): boolean => {
@@ -494,7 +534,9 @@ export default class NoospherePlugin extends Plugin {
       action("review").textContent = reviewing ? "审阅中…" : "AI 审阅";
       action("cancelReview").hidden = !reviewing;
       action("cancelReview").disabled = !reviewing || !!reviewController?.signal.aborted;
-      action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim() || !target.value.trim() || savedToTarget();
+      const autoMode = saveMode() === "auto";
+      action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim()
+        || (autoMode ? !rootDocument.value.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
       for (const name of ["settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
@@ -543,6 +585,9 @@ export default class NoospherePlugin extends Plugin {
       textReviewed = restored.textReviewed ?? (!!reviewInfo || !!reviewedMarkdown);
       target.value = restored.targetDocumentId;
       savedDocumentId = restored.savedDocumentId;
+      classification = restored.classification;
+      rootDocument.value = restored.rootDocumentId || this.settings.rootDocumentId || "";
+      setSaveMode(restored.saveMode || this.settings.saveMode || "manual");
       savedContentChanged = restored.savedContentChanged || false;
       repairImageChoices(restored.imageDecisions);
       renderSavedLocation();
@@ -745,6 +790,8 @@ export default class NoospherePlugin extends Plugin {
         imageReview: !!imageProvider.value,
         customPerspectives: customPerspectives.map(item => ({ ...item, sections: undefined })),
         targetDocumentId: "",
+        rootDocumentId: field("rootDocumentId").value.trim(),
+        saveMode: saveMode(),
       };
     };
     const cloneSettings = (value: Settings): Settings => JSON.parse(JSON.stringify(value)) as Settings;
@@ -1047,6 +1094,7 @@ export default class NoospherePlugin extends Plugin {
       renderPerspectiveOptions();
       setDropdown("reviewPerspective", saved.reviewPerspective, false);
       setDropdown("workPerspective", saved.reviewPerspective, false);
+      rootDocument.value = saved.rootDocumentId;
       refreshPerspectiveEditor();
       renderProviderView();
       root.querySelectorAll<HTMLInputElement>(".noosphere__secret input").forEach(input => {
@@ -1411,10 +1459,13 @@ export default class NoospherePlugin extends Plugin {
     });
     action("save").addEventListener("click", () => {
       void run("保存", async () => {
-        const documentId = target.value.trim();
+        const autoMode = saveMode() === "auto";
+        const manualDocumentId = target.value.trim();
+        const rootDocumentId = rootDocument.value.trim();
         await saveSettings();
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
-        await validateTargetDocument(documentId);
+        if (!autoMode) await validateTargetDocument(manualDocumentId);
+        else if (!rootDocumentId) throw new Error("请填写分类根文档 ID");
         if (this.uninstalled) throw new Error("知流已卸载");
         let content = markdown.value;
         let note = "";
@@ -1435,8 +1486,33 @@ export default class NoospherePlugin extends Plugin {
           note += `，${result.warnings.length} 张保留原链接`;
           showMessage(`${result.warnings.length} 张图片未能保存到思源，正文仍保留原链接。${result.warnings[0]}`, 7000, "error");
         }
-        await appendArticle(documentId, article, content, editorState?.blockDOM);
-        savedDocumentId = documentId; savedContentChanged = false;
+        if (autoMode) {
+          // 分类失败不回退成手动：落到根文档仍是一次有效落库，理由随草稿展示。
+          const categories = await discoverCategories();
+          let decision: ClassificationResult = { categoryId: null, confidence: 0, reason: "没有已配置的分类" };
+          if (categories.length) {
+            setStatus("正在选择分类…");
+            try {
+              decision = await classifyArticle(article.title, content, categories, this.settings);
+            } catch (error) {
+              decision = { categoryId: null, confidence: 0, reason: `分类失败：${error instanceof Error ? error.message : String(error)}` };
+            }
+          }
+          const parentId = decision.categoryId || rootDocumentId;
+          const written = await ensureArticleDocument(parentId, article, content);
+          classification = decision;
+          savedDocumentId = written.documentId;
+          savedContentChanged = false;
+          // 目录块只覆盖标记块；分类文档没放目录块时安静跳过。
+          if (decision.categoryId) void refreshCategoryIndex(decision.categoryId).catch(() => undefined);
+          renderSavedLocation();
+          renderSaveMode();
+          persistDraft();
+          const where = categories.find(item => item.id === decision.categoryId)?.path || "分类根";
+          return `已按「${where}」${written.created ? "新建并落库" : "更新落库"}${note}。点击“打开文档”查看。`;
+        }
+        await appendArticle(manualDocumentId, article, content, editorState?.blockDOM);
+        savedDocumentId = manualDocumentId; savedContentChanged = false;
         renderSavedLocation();
         persistDraft();
         return `已保存到思源${note}。点击“打开文档”查看。`;
