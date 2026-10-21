@@ -321,6 +321,11 @@ export default class NoospherePlugin extends Plugin {
       (find("rootField") as HTMLElement).hidden = !auto;
       (find("indexOption") as HTMLElement).hidden = !auto;
       const note = find("classifyNote") as HTMLElement;
+      // 分类理由可展开阅读，长说明不会持续挤占审阅操作区。
+      (find("classifyDetails") as HTMLElement).hidden = !auto;
+      (find("classifySummary") as HTMLElement).textContent = classification
+        ? (classification.categoryId ? "查看分类原因" : "已保存到根目录，查看原因")
+        : "审阅后自动归类并保存";
       note.hidden = !auto;
       note.textContent = auto
         ? classification

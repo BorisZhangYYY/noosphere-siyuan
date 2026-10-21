@@ -139,6 +139,9 @@
 .noosphere__asset-state.is-failed { color:var(--b3-theme-error); }
 .noosphere__save-card { box-shadow:0 -3px 12px rgba(0,0,0,.035); }
 .noosphere__save-card label { font-size:12px; }
+.noosphere__classification { margin-top:10px; font-size:12px; color:var(--b3-theme-on-surface); }
+.noosphere__classification summary { cursor:pointer; line-height:1.6; }
+.noosphere__classification .noosphere__rail-note { max-height:8em; overflow:auto; margin:8px 0 0; }
 .noosphere__save-mode { display:flex; flex-wrap:wrap; gap:8px 16px; }
 .noosphere__save-mode label, .noosphere__save-card [data-role="indexOption"] { display:flex; align-items:center; gap:6px; font-weight:400; cursor:pointer; }
 .noosphere__save-mode input, .noosphere__save-card [data-role="indexOption"] input { margin:0; accent-color:var(--ns-accent); }
