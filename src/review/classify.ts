@@ -2,10 +2,8 @@
  * 分类：把审阅稿交给模型，在用户已有的分类文档里选一个落点。
  * 与 Noosphere 本体一致，模型只能选择、不能创建；置信度不足或候选为空时落到根文档。
  */
-import { proxyRequest } from "../siyuan/api";
+import { requestShortText } from "./short-request";
 import { classificationCandidates, type CategoryNode } from "../siyuan/tree";
-import { modelEndpoint } from "./endpoint";
-import { headers } from "./provider-headers";
 import type { Settings } from "../types";
 
 /** 低于该置信度视为没有把握，交给调用方回落到根文档。 */
@@ -39,58 +37,6 @@ function extractJsonObject(text: string): Record<string, unknown> {
   return payload as Record<string, unknown>;
 }
 
-function classifyOutputTokens(markdown: string): number {
-  return Math.min(1024, Math.max(256, Math.ceil(markdown.length / 20)));
-}
-
-/** 按供应商协议组装请求体；分类只需要短输出，沿用审阅的协议适配避免重复实现。 */
-function requestShape(settings: Settings, systemPrompt: string, userMessage: string): { endpoint: string; payload: object } {
-  const maxTokens = classifyOutputTokens(userMessage);
-  if (settings.modelFormat === "anthropic") {
-    return {
-      endpoint: modelEndpoint(settings.modelBaseUrl, "/messages", settings.modelFormat),
-      payload: { model: settings.modelName.trim(), max_tokens: maxTokens, temperature: 0.1, system: systemPrompt, messages: [{ role: "user", content: userMessage }] },
-    };
-  }
-  if (settings.modelFormat === "openai_responses") {
-    return {
-      endpoint: modelEndpoint(settings.modelBaseUrl, "/responses", settings.modelFormat),
-      payload: { model: settings.modelName.trim(), instructions: systemPrompt, input: userMessage, max_output_tokens: maxTokens },
-    };
-  }
-  if (settings.modelFormat === "google") {
-    return {
-      endpoint: modelEndpoint(settings.modelBaseUrl, `/models/${encodeURIComponent(settings.modelName.trim())}:generateContent`, settings.modelFormat),
-      payload: {
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: "user", parts: [{ text: userMessage }] }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: maxTokens },
-      },
-    };
-  }
-  return {
-    endpoint: modelEndpoint(settings.modelBaseUrl, "/chat/completions", settings.modelFormat),
-    payload: { model: settings.modelName.trim(), temperature: 0.1, max_tokens: maxTokens, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }] },
-  };
-}
-
-interface ChatCompletion { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }> }
-interface AnthropicMessage { content?: Array<{ type?: string; text?: string }> }
-interface OpenAIResponse { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> }
-interface GeminiResponse { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
-
-function responseText(settings: Settings, body: string): string {
-  const result = JSON.parse(body) as ChatCompletion & AnthropicMessage & OpenAIResponse & GeminiResponse;
-  if (settings.modelFormat === "anthropic") return (result.content || []).filter(part => part.type === "text").map(part => part.text || "").join("\n");
-  if (settings.modelFormat === "openai_responses") {
-    return result.output_text
-      || (result.output || []).flatMap(item => item.content || []).filter(part => part.type === "output_text").map(part => part.text || "").join("\n");
-  }
-  if (settings.modelFormat === "google") return (result.candidates?.[0]?.content?.parts || []).map(part => part.text || "").join("\n");
-  const content = result.choices?.[0]?.message?.content;
-  return typeof content === "string" ? content : (content || []).filter(part => part.type === "text").map(part => part.text || "").join("\n");
-}
-
 export interface ClassifyOptions {
   signal?: AbortSignal;
 }
@@ -111,9 +57,7 @@ export async function classifyArticle(
   // 分类只需要主题信息；截断长文既省 token 也避免分类被正文细节带偏。
   const excerpt = markdown.slice(0, 4000);
   const userMessage = `已有分类：\n${JSON.stringify(classificationCandidates(categories), null, 1)}\n\n文章标题：${title}\n\n文章正文节选：\n${excerpt}`;
-  const { endpoint, payload } = requestShape(settings, CLASSIFY_PROMPT, userMessage);
-  const response = await proxyRequest(endpoint, "POST", headers(settings), payload, "text", 120000, options.signal);
-  const text = responseText(settings, response.body);
+  const text = await requestShortText(settings, CLASSIFY_PROMPT, userMessage, options.signal);
   if (!text.trim()) throw new Error("模型没有返回分类结果");
   const parsed = extractJsonObject(text);
   const rawId = typeof parsed.collection_id === "string" ? parsed.collection_id.trim() : "";

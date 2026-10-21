@@ -13,8 +13,12 @@ export class CategoryIndexMaintenance {
   constructor(private readonly settings: () => IndexMaintenanceSettings, private readonly onError: (error: unknown) => void) {}
 
   /** 内核命令覆盖侧栏操作、其他窗口与 API 写入，不依赖用户重新打开索引页。 */
-  onMessage = (event: { detail?: { cmd?: string } }): void => {
-    if (TREE_COMMANDS.has(event.detail?.cmd || "")) this.schedule();
+  onMessage = (event: { detail?: { cmd?: string; data?: unknown } }): void => {
+    const detail = event.detail;
+    // 分类标记的增删也会改变总览；普通正文和目录更新不触发自循环。
+    const categoryAttrs = ["transactions", "setAttrs"].includes(detail?.cmd || "")
+      && JSON.stringify(detail?.data || "").includes("custom-zl-category");
+    if (TREE_COMMANDS.has(detail?.cmd || "") || categoryAttrs) this.schedule();
   };
   schedule(): void {
     if (this.stopped) return;

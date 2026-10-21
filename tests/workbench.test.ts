@@ -35,6 +35,8 @@ vi.mock("../src/siyuan/tree", () => ({ discoverCategories: vi.fn(), refreshCateg
 vi.mock("../src/siyuan/destination", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/destination")>(), findArticleDocument: vi.fn(), ensureArticleDocument: vi.fn() }));
 vi.mock("../src/siyuan/location", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/location")>(), locateDocument: vi.fn() }));
 vi.mock("../src/siyuan/index-maintenance", () => ({ CategoryIndexMaintenance: class { onMessage = vi.fn(); schedule = vi.fn(); stop = vi.fn(); } }));
+vi.mock("../src/siyuan/category-management", () => ({ ensureClassificationOverview: vi.fn().mockResolvedValue("20260101000000-ooooooo") }));
+vi.mock("../src/category-manager", () => ({ openCategoryManager: vi.fn().mockReturnValue(() => undefined) }));
 vi.mock("../src/review/classify", () => ({ classifyArticle: vi.fn() }));
 // 原生键盘行为在思源现场验收；这里验证工作台与原生编辑器之间的数据和生命周期。
 vi.mock("../src/article/editor", async importOriginal => ({
@@ -81,6 +83,7 @@ import { appendArticle } from "../src/siyuan/writer";
 import { type CaptureDraft, DRAFT_STORAGE_NAME } from "../src/article/draft";
 import { type CaptureHistory, HISTORY_STORAGE_NAME } from "../src/article/history";
 import { openTab } from "siyuan";
+import { openCategoryManager } from "../src/category-manager";
 
 const article = { url: "https://example.com/article", title: "文章标题", markdown: "# 文章标题\n\n原文 ![图](https://example.com/photo.png)" };
 function input(name: string, value: string): void {
@@ -1088,6 +1091,13 @@ describe("workbench regression", () => {
     fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
     await launch();
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", classificationSettingsVersion: 1 });
+  });
+  it("opens category management with the saved root and preserves the article", async () => {
+    await launch(); await scrape();
+    const previous = stored().markdown;
+    click("toggleSettings"); input("rootDocumentId", "20260101000000-aaaaaaa"); click("manageCategories"); await ready();
+    expect(openCategoryManager).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ rootDocumentId: "20260101000000-aaaaaaa" }), expect.any(Function), expect.any(Function));
+    expect(stored().markdown).toBe(previous);
   });
   it("waits for the entire review including image processing before automatic saving", async () => {
     let finish!: () => void; const result = completedReview(); localize();

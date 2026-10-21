@@ -73,10 +73,10 @@ describe("category discovery", () => {
     override = path => path === "/api/query/sql" ? [row(ai, '')] : undefined;
     expect(classificationCandidates(await discoverCategories(root))[0].description).toBe("正文分类介绍");
   });
-  it("uses the explicit description without reading the body", async () => {
+  it("keeps a legacy description override when the document has no description section", async () => {
     override = path => path === "/api/query/sql" ? [row(ai)] : undefined;
     expect((await discoverCategories(root))[0].description).toBe("分类介绍");
-    expect(calls().some(([path]) => path === "/api/block/getBlockKramdown")).toBe(false);
+    expect(calls().some(([path]) => path === "/api/block/getBlockKramdown")).toBe(true);
   });
   it("supports a notebook anchor without admitting another notebook", async () => {
     override = path => path === "/api/query/sql" ? [row(ai), row(outside), { ...row(llm), box: 'other' }] : undefined;

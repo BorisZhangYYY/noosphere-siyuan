@@ -6,6 +6,8 @@ import { discoverCategories, refreshCategoryIndex } from "../src/siyuan/tree";
 import { articleIdentity, ensureArticleDocument } from "../src/siyuan/destination";
 import { locateDocument, type DocumentLocation } from "../src/siyuan/location";
 import { CategoryIndexMaintenance } from "../src/siyuan/index-maintenance";
+import { createCategory, ensureClassificationOverview, loadManagedCategories, updateCategory } from "../src/siyuan/category-management";
+import { categoryDescription } from "../src/siyuan/tree";
 
 const base = process.env.SIYUAN_TEST_URL;
 const token = process.env.SIYUAN_TEST_TOKEN;
@@ -124,4 +126,78 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     const md = (await kernelPost<{ kramdown: string }>("/api/block/getBlockKramdown", { id: empty })).kramdown;
     expect(md).toContain("暂无子文档。"); expect(md).not.toContain(child);
   });
+  it("creates nested categories, structured descriptions and a category-only root overview", async () => {
+    const rootId = await create('/分类管理根', '根文档中的用户说明必须保留。');
+    const ai = await createCategory(rootId, { name: '人工智能', description: '收集智能体、工具调用和机器学习应用。', parentId: rootId });
+    const llm = await createCategory(rootId, { name: '大模型', description: '收集模型训练、推理、提示词与 RAG。', parentId: ai });
+    const sample = await create('/分类管理根/人工智能/大模型/样文', '文章可编辑');
+    expect(await ensureClassificationOverview(rootId)).toBe(rootId);
+    const rootMd = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: rootId })).kramdown;
+    expect(rootMd).toContain('根文档中的用户说明必须保留'); expect(rootMd).toContain(ai); expect(rootMd).toContain(llm); expect(rootMd).not.toContain(sample);
+    const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: ai })).kramdown;
+    expect(md).toContain('## 分类描述'); expect(md).toContain('custom-zl-description="true"'); expect(md).toContain('## 文章目录');
+    expect((await discoverCategories(rootId)).map(node => node.path)).toEqual(['人工智能', '人工智能 / 大模型']);
+    expect((await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: ai }))['custom-sy-readonly']).toBe('true');
+    expect((await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: sample }))['custom-sy-readonly']).not.toBe('true');
+  }, 20000);
+  it("updates descriptions without replacing user notes or the managed directory and tolerates renamed headings", async () => {
+    const rootId = await create('/描述编辑根', '根介绍');
+    const id = await createCategory(rootId, { name: '游戏', description: '游戏设计旧描述', parentId: rootId });
+    await kernelPost('/api/block/appendBlock', { parentID: id, dataType: 'markdown', data: '## 用户备注\n\n用户手写内容保持完整。' });
+    const children = await kernelPost<Array<{ id: string; type: string; content?: string }>>('/api/block/getChildBlocks', { id });
+    const index = children.find(child => child.type === 'p' && child.content?.includes('暂无子文档'))!;
+    const directoryHeading = children.find(child => child.type === 'h' && child.content === '文章目录')!;
+    await kernelPost('/api/block/updateBlock', { id: directoryHeading.id, dataType: 'markdown', data: '## 目录' });
+    await attrs(id, { 'custom-sy-readonly': 'false' });
+    await updateCategory(rootId, id, { name: '游戏设计', description: '收集游戏机制设计，不包括小说叙事。', parentId: rootId });
+    const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id })).kramdown;
+    expect(md).toContain('用户手写内容保持完整'); expect(md).toContain(index.id); expect(md).toContain('## 目录');
+    expect(await categoryDescription(id, '过时属性')).toBe('收集游戏机制设计，不包括小说叙事。');
+    const heading = children.find(child => child.type === 'h' && child.content === '分类描述')!;
+    await kernelPost('/api/block/updateBlock', { id: heading.id, dataType: 'markdown', data: '## 收录说明' });
+    expect(await categoryDescription(id, '过时属性')).toBe('收集游戏机制设计，不包括小说叙事。');
+    expect((await locateDocument(id)).hpath).toBe('/描述编辑根/游戏设计');
+    expect((await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id }))['custom-sy-readonly']).toBe('false');
+  }, 20000);
+  it("migrates old introduction paragraphs and keeps unrelated same-title documents safe", async () => {
+    const rootId = await create('/迁移管理根', '根介绍');
+    const old = await create('/迁移管理根/旧分类', '旧的孤立介绍\n\n## 目录\n\n暂无子文档。\n{: custom-zl-index="true"}\n\n## 备注\n\n用户备注');
+    await attrs(old, { 'custom-zl-category': 'true', 'custom-zl-desc': '旧属性中的有效介绍' });
+    const managed = await loadManagedCategories(rootId);
+    expect(managed.categories.find(node => node.id === old)?.description).toBe('旧属性中的有效介绍');
+    const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: old })).kramdown;
+    expect(md).toContain('## 分类描述'); expect(md).toContain('用户备注'); expect(md).toContain('## 目录');
+    const unrelated = await create('/迁移管理根/手写笔记', '不要覆盖');
+    await expect(createCategory(rootId, { name: '手写笔记', description: '规则', parentId: rootId })).rejects.toThrow('同名');
+    expect((await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: unrelated })).kramdown).toContain('不要覆盖');
+    await expect(createCategory(rootId, { name: '范围外', description: '规则', parentId: outside })).rejects.toThrow('移出');
+  }, 20000);
+  it("creates one notebook overview without taking over an existing document with that name", async () => {
+    const existing = await create('/分类总览', '用户已有同名文档');
+    const overview = await ensureClassificationOverview(notebook);
+    expect(overview).not.toBe(existing); expect(await ensureClassificationOverview(notebook)).toBe(overview);
+    expect((await locateDocument(overview)).hpath).toBe('/分类总览（2）');
+    const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: overview })).kramdown;
+    expect(md).toContain('分类使用说明'); expect(md).toContain(category); expect(md).not.toContain(`((${overview}`);
+    expect((await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: existing })).kramdown).toContain('用户已有同名文档');
+  }, 20000);
+  it("updates the category overview when a category marker is added or removed", async () => {
+    const rootId = await create('/标记变更根', '根说明');
+    await ensureClassificationOverview(rootId);
+    const sync = new CategoryIndexMaintenance(() => ({ rootDocumentId: rootId, autoCreateIndex: false }), error => errors.push(error));
+    const errors: unknown[] = [], events: string[] = [];
+    const url = new URL(base!); url.protocol = 'ws:'; url.pathname = '/ws'; url.search = `?app=noosphere-test&id=attrs-${Date.now()}&type=main`;
+    const socket = new WebSocket(url);
+    socket.addEventListener('message', message => { const detail = JSON.parse(String(message.data)); events.push(detail.cmd); sync.onMessage({ detail }); });
+    const content = async (): Promise<string> => (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: rootId })).kramdown;
+    try {
+      await new Promise<void>((resolve, reject) => { socket.addEventListener('open', () => resolve(), { once: true }); socket.addEventListener('error', () => reject(new Error('WebSocket 连接失败')), { once: true }); });
+      const doc = await create('/标记变更根/自定义分类', '用户手动建立的分类');
+      await attrs(doc, { 'custom-zl-category': 'true' });
+      await vi.waitFor(async () => expect(await content(), events.join(',')).toContain(doc), { timeout: 8000 });
+      await attrs(doc, { 'custom-zl-category': '' });
+      await vi.waitFor(async () => expect(await content(), events.join(',')).not.toContain(doc), { timeout: 8000 });
+      expect(errors).toEqual([]);
+    } finally { sync.stop(); socket.close(); }
+  }, 30000);
 });

@@ -59,7 +59,7 @@ export function captureContent(): string {
           <div class="noosphere__format-editor" data-role="templateBuilder" hidden><textarea data-field="templateEditor" class="b3-text-field noosphere__perspective-textarea" spellcheck="false" aria-label="文章格式要求"></textarea></div>
         </section>
       </section>
-      <section class="noosphere__panel" aria-label="分类设置"><div class="noosphere__panel-title"><h3>分类设置</h3></div><label>分类根目录<input data-field="rootDocumentId" class="b3-text-field" placeholder="输入笔记本或根文档 ID"></label><label class="noosphere__vision-option"><input type="checkbox" data-field="autoCreateIndex">自动创建并维护分类目录</label></section>
+      <section class="noosphere__panel" aria-label="分类设置"><div class="noosphere__panel-title"><h3>分类设置</h3></div><label>分类根目录<input data-field="rootDocumentId" class="b3-text-field" placeholder="输入笔记本或根文档 ID"></label><label class="noosphere__vision-option"><input type="checkbox" data-field="autoCreateIndex">自动创建并维护分类目录</label><p class="noosphere__field-help">AI 根据已有分类的名称、路径和描述归类。分类页默认锁定，文章可编辑；可在分类管理中维护规则。</p><button data-action="manageCategories" class="b3-button b3-button--outline" type="button">分类管理</button></section>
     </main>
     <main class="noosphere__workbench" data-view="workbench" hidden>
       <nav class="noosphere__work-tabs" aria-label="工作台视图"><button data-action="showCapture" type="button" class="is-active" aria-pressed="true">当前文章</button><button data-action="showHistory" type="button" aria-pressed="false">历史记录 <span data-role="historyCount">0</span></button></nav>

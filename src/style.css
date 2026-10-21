@@ -266,3 +266,24 @@
 .noosphere .b3-text-field { font-size:15px; }
 .noosphere__saved,.noosphere__model-results > span,.noosphere__model-options button { font-size:13px; }
 .noosphere__perspective-heading p { font-size:14px; }
+/* 分类管理使用独立滚动窗口，表单与思源文档双向同步。 */
+.noosphere__category-page { height:min(78vh,850px); padding:20px; overflow:auto; gap:16px; }
+.noosphere__category-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.noosphere__category-toolbar > span { min-width:0; overflow-wrap:anywhere; font-size:13px; }
+.noosphere__category-toolbar > div, .noosphere__category-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.noosphere__category-help { padding:14px 16px; border-radius:10px; background:var(--ns-soft); line-height:1.7; font-size:13px; }
+.noosphere__category-help p { margin:8px 0 0; }
+.noosphere__category-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
+.noosphere__category-layout > section { min-width:0; }
+.noosphere__category-layout h3 { margin:0 0 12px; font-size:17px; }
+.noosphere__category-list { display:flex; flex-direction:column; gap:12px; }
+.noosphere__category-item { padding:12px 0; border-bottom:1px solid var(--ns-border); overflow-wrap:anywhere; }
+.noosphere__category-item:first-child { padding-top:0; }
+.noosphere__category-item p { color:var(--b3-theme-on-surface); font-size:13px; line-height:1.7; white-space:pre-wrap; }
+.noosphere__category-item > div { display:flex; gap:8px; }
+.noosphere__category-item button { min-height:30px !important; font-size:12px !important; }
+.noosphere__category-actions { margin-top:12px; }
+.noosphere__category-page textarea { resize:vertical; min-height:160px; font:inherit; line-height:1.7; }
+.noosphere__category-status { margin:0; min-height:1.7em; font-size:13px; line-height:1.7; color:var(--b3-theme-on-surface); }
+.noosphere__category-status.is-error { color:var(--b3-theme-error); }
+@media (max-width:760px) { .noosphere__category-layout { grid-template-columns:1fr; } .noosphere__category-toolbar { align-items:flex-start; flex-direction:column; } }

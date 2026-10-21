@@ -1,12 +1,14 @@
 /** 从锚点下发现分类，并维护介绍下方的受管目录块。 */
 import { kernelPost } from "./api";
 import { locateDocument, parentDocumentId, rootCondition, SIYUAN_ID, sqlLiteral, withinRoot, type DocumentLocation } from "./location";
+import { readCategoryDescription } from "./category-description";
 
 export const CATEGORY_ATTR = "custom-zl-category";
 export const INDEX_ATTR = "custom-zl-index";
 export const INDEX_ENABLED_ATTR = "custom-zl-index-enabled";
 const INDEX_SIGNATURE_ATTR = "custom-zl-index-signature";
 export const READONLY_ATTR = "custom-sy-readonly";
+export const OVERVIEW_ROOT_ATTR = "custom-zl-overview-root";
 export interface CategoryNode { id: string; name: string; description: string; path: string; parentId: string }
 interface SqlRow { id: string; box: string; path: string; hpath: string; content: string; ial: string; type: string }
 
@@ -23,19 +25,13 @@ export function attrFromIal(ial: string, name: string): string {
 
 /** 跳过文档属性、标题和自动目录，提取首个介绍段落。 */
 export function descriptionFromMarkdown(markdown: string): string {
-  const body = markdown.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")
-    .replace(/^\s*\{:[^\n]*\}\s*$/gm, "");
-  const first = body.split(/\n\s*\n/).map(block => block.trim()).find(block => block
-    && !/^(---|\*\*\*|___)$/.test(block) && !/^#{1,6}\s+/.test(block)
-    && !/^(?:[*+-]|\d+\.)\s|^```|^~~~|^\{\{/.test(block));
-  return first ? first.replace(/^>\s*/gm, "").replace(/\s+/g, " ").trim().slice(0, 2000) : "";
+  return readCategoryDescription(markdown);
 }
 
 /** getBlockKramdown 的 data 是对象，不能作为 Markdown 字符串读取。 */
 export async function categoryDescription(documentId: string, known: string, signal?: AbortSignal): Promise<string> {
-  if (known.trim()) return known.trim();
   const result = await kernelPost<{ id: string; kramdown: string }>("/api/block/getBlockKramdown", { id: documentId }, undefined, signal);
-  return descriptionFromMarkdown(result.kramdown);
+  return readCategoryDescription(result.kramdown, known);
 }
 
 /** 用 box/path 限定真实子树，用 hpath 保留包括未标记中间目录在内的完整分类路径。 */
@@ -62,6 +58,19 @@ export function classificationCandidates(nodes: CategoryNode[]): Array<{ id: str
 }
 
 export interface CategoryIndexItem { id: string; title: string; children?: CategoryIndexItem[] }
+/** 总览只收录标记为分类的文档，未标记的中间层保留在显示路径里。 */
+export function classificationIndexItems(categories: CategoryNode[]): CategoryIndexItem[] {
+  const items = new Map(categories.map(node => [node.id, { id: node.id, title: node.path || node.name, children: [] as CategoryIndexItem[] }]));
+  const roots: CategoryIndexItem[] = [];
+  for (const node of categories) {
+    const parent = categories.filter(other => other.id !== node.id && node.path.startsWith(other.path + " / "))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    const item = items.get(node.id)!;
+    if (parent) { item.title = node.path.slice(parent.path.length + 3); items.get(parent.id)!.children.push(item); }
+    else roots.push(item);
+  }
+  return roots;
+}
 /** 原生动态块引用与目录插件一致；链接文字不再是可单独编辑的普通超链接。 */
 export function renderCategoryIndex(items: CategoryIndexItem[], depth = 0): string {
   const html = (text: string): string => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -117,8 +126,10 @@ async function updateCategoryIndex(categoryDocId: string, create: boolean): Prom
   const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: categoryDocId });
   if (!block && !create && attrs[INDEX_ENABLED_ATTR] !== "true") return null;
   const location = await locateDocument(categoryDocId);
-  const items = await indexItems(location);
-  const data = renderCategoryIndex(items) || "暂无子文档。";
+  const overviewRoot = attrs[OVERVIEW_ROOT_ATTR];
+  const items = overviewRoot ? classificationIndexItems(await discoverCategories(overviewRoot)) : await indexItems(location);
+  const emptyText = overviewRoot ? "暂无分类。请在知流的分类管理中新增分类。" : "暂无子文档。";
+  const data = renderCategoryIndex(items) || emptyText;
   const signature = indexSignature(items);
   const docAttrs: Record<string, string> = {};
   if (attrs[INDEX_ENABLED_ATTR] !== "true") docAttrs[INDEX_ENABLED_ATTR] = "true";
@@ -128,7 +139,7 @@ async function updateCategoryIndex(categoryDocId: string, create: boolean): Prom
   if (id && attrFromIal(block!.ial, INDEX_SIGNATURE_ATTR) === signature) {
     const current = await kernelPost<{ kramdown: string }>("/api/block/getBlockKramdown", { id });
     const references = Array.from(current.kramdown.matchAll(/\(\((\d{14}-[a-z0-9]{7})[\s)]/g), match => match[1]);
-    if (JSON.stringify(references) === JSON.stringify(itemIds(items)) && (items.length || current.kramdown.includes("暂无子文档。"))) {
+    if (JSON.stringify(references) === JSON.stringify(itemIds(items)) && (items.length || current.kramdown.includes(emptyText))) {
       if (Object.keys(docAttrs).length) await kernelPost("/api/attr/setBlockAttrs", { id: categoryDocId, attrs: docAttrs });
       return id;
     }
