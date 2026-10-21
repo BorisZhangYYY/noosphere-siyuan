@@ -1013,8 +1013,10 @@ describe("workbench regression", () => {
     expect(reviewArticleDetailed).not.toHaveBeenCalled(); expect(stored().markdown).toBe(article.markdown);
   });
   /** 自动模式覆盖实际工作台事件，而非只验证底层函数。 */
-  function chooseAuto(): void {
+  async function chooseAuto(): Promise<void> {
+    click("toggleSettings");
     input("rootDocumentId", "20260101000000-aaaaaaa");
+    click("settings"); await ready(); click("toggleSettings");
     document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="auto"]')!.click();
   }
   function completedReview() {
@@ -1024,27 +1026,68 @@ describe("workbench regression", () => {
     vi.mocked(localizeMarkdownImages).mockImplementation(async markdown => ({ markdown, localized: 0, warnings: [] }));
   }
   it("switches back to manual mode with mutually exclusive radio controls", async () => {
-    await launch(); chooseAuto();
+    await launch(); await chooseAuto();
     const auto = document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="auto"]')!;
     document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="manual"]')!.click();
     expect(auto.checked).toBe(false);
-    expect(document.querySelector<HTMLElement>('[data-role="rootField"]')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-role="rootSummaryField"]')!.hidden).toBe(true);
     expect(document.querySelector<HTMLElement>('[data-role="targetField"]')!.hidden).toBe(false);
   });
   it("keeps the manual duplicate-save guard after toggling modes", async () => {
     vi.mocked(localizeMarkdownImages).mockImplementationOnce(async markdown => ({ markdown, localized: 0, warnings: [] }));
     await launch(); await scrape(); input("targetDocumentId", "20260101000000-aaaaaaa"); click("save"); await ready();
-    chooseAuto(); document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="manual"]')!.click();
+    await chooseAuto(); document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="manual"]')!.click();
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
   });
-  it("persists anchor edits and index opt-in when closing without another action", async () => {
-    await launch(); await scrape(); chooseAuto();
-    const option = document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!; option.click();
+  it("manages root and index settings globally and exposes no root editor in the article", async () => {
+    await launch(); await scrape(); await chooseAuto();
+    click("toggleSettings");
+    document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.click();
+    click("settings"); await ready(); click("toggleSettings");
+    expect(document.querySelector('[data-view="workbench"] [data-field="rootDocumentId"]')).toBeNull();
+    expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("20260101000000-aaaaaaa");
     fixtures.dialogs.at(-1)!.destroy();
-    await vi.waitFor(() => expect(stored().rootDocumentId).toBe("20260101000000-aaaaaaa"));
+    await vi.waitFor(() => expect(stored()).not.toHaveProperty("rootDocumentId"));
+    expect(stored()).not.toHaveProperty("autoCreateIndex");
+    expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", autoCreateIndex: true });
     document.querySelector<HTMLButtonElement>("#entry")!.click();
+    expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.closest('[aria-label="分类设置"]')).not.toBeNull();
+    expect(document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.checked).toBe(true);
+  });
+  function legacyDraft(): CaptureDraft {
+    return { version: 1, updatedAt: Date.now(), url: article.url, article, markdown: article.markdown,
+      reviewedMarkdown: "", imageDecisions: [], targetDocumentId: "", perspective: "original", savedDocumentId: "",
+      rootDocumentId: "20260101000000-ccccccc", autoCreateIndex: false, saveMode: "auto" };
+  }
+  it("keeps current classification settings when restoring an old draft and opening history", async () => {
+    fixtures.files.set("settings.json", { ...DEFAULT_SETTINGS, rootDocumentId: "20260101000000-aaaaaaa", autoCreateIndex: true, firecrawlKey: "test", modelKey: "test", modelName: "test" });
+    fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
+    fixtures.files.set(HISTORY_STORAGE_NAME, { version: 1, updatedAt: Date.now(), entries: [{ id: "old", capturedAt: Date.now(), draft: legacyDraft() }] });
+    await launch(); click("showHistory"); historyAction("view");
     expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.value).toBe("20260101000000-aaaaaaa");
     expect(document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.checked).toBe(true);
+    expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("20260101000000-aaaaaaa");
+    click("toggleSettings"); click("settings"); await ready();
+    expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", autoCreateIndex: true });
+  });
+  it("migrates a legacy draft root once without reviving it after explicitly clearing settings", async () => {
+    const { classificationSettingsVersion: _version, ...legacySettings } = DEFAULT_SETTINGS;
+    fixtures.files.set("settings.json", { ...legacySettings, firecrawlKey: "test" });
+    fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
+    const plugin = await launch();
+    expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-ccccccc", classificationSettingsVersion: 1 });
+    click("toggleSettings"); input("rootDocumentId", ""); click("settings"); await ready();
+    plugin.onunload(); fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
+    await launch();
+    expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.value).toBe("");
+    expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("未设置");
+  });
+  it("prefers an existing global root during the one-time legacy migration", async () => {
+    const { classificationSettingsVersion: _version, ...legacySettings } = DEFAULT_SETTINGS;
+    fixtures.files.set("settings.json", { ...legacySettings, rootDocumentId: "20260101000000-aaaaaaa", firecrawlKey: "test" });
+    fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
+    await launch();
+    expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", classificationSettingsVersion: 1 });
   });
   it("waits for the entire review including image processing before automatic saving", async () => {
     let finish!: () => void; const result = completedReview(); localize();
@@ -1052,7 +1095,7 @@ describe("workbench regression", () => {
       options?.onTextReviewed?.(result);
       await new Promise<void>(resolve => { finish = resolve; }); return result;
     });
-    await launch(); await scrape(); chooseAuto(); click("review");
+    await launch(); await scrape(); await chooseAuto(); click("review");
     await vi.waitFor(() => expect(finish).toBeDefined());
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     finish(); await ready();
@@ -1067,7 +1110,7 @@ describe("workbench regression", () => {
   });
   it("does not save when review fails or is cancelled", async () => {
     vi.mocked(reviewArticleDetailed).mockRejectedValueOnce(new Error("模型失败"));
-    await launch(); await scrape(); chooseAuto(); click("review"); await ready();
+    await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     let finish!: (result: ReturnType<typeof completedReview>) => void;
     vi.mocked(reviewArticleDetailed).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
@@ -1077,17 +1120,17 @@ describe("workbench regression", () => {
   });
   it("requires a valid anchor before sending a review request", async () => {
     vi.mocked(locateDocument).mockRejectedValueOnce(new Error("锚点无效"));
-    await launch(); await scrape(); chooseAuto(); click("review"); await ready();
+    await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
     expect(reviewArticleDetailed).not.toHaveBeenCalled(); expect(ensureArticleDocument).not.toHaveBeenCalled();
   });
   it("falls back under the configured root when classification fails", async () => {
     localize(); vi.mocked(classifyArticle).mockRejectedValueOnce(new Error("分类超时"));
-    await launch(); await scrape(); chooseAuto(); click("save"); await ready();
+    await launch(); await scrape(); await chooseAuto(); click("save"); await ready();
     expect(ensureArticleDocument).toHaveBeenCalledWith("20260101000000-aaaaaaa", expect.anything(), expect.anything(), expect.anything());
     expect(appendArticle).not.toHaveBeenCalled(); expect(stored().classification?.reason).toContain("分类超时");
   });
   it("updates the saved source without running classification again", async () => {
-    localize(); await launch(); await scrape(); chooseAuto(); click("save"); await ready();
+    localize(); await launch(); await scrape(); await chooseAuto(); click("save"); await ready();
     vi.mocked(findArticleDocument).mockResolvedValueOnce({ id: "20260101000000-eeeeeee", notebook: "20260101000000-0000000", path: "/20260101000000-aaaaaaa/20260101000000-bbbbbbb/20260101000000-eeeeeee.sy", hpath: "/知流/AI/文章标题", isNotebook: false });
     click("save"); await ready();
     expect(classifyArticle).toHaveBeenCalledOnce();
@@ -1096,14 +1139,14 @@ describe("workbench regression", () => {
   it("retains the completed review and allows retrying a failed automatic save", async () => {
     localize(); vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(completedReview());
     vi.mocked(ensureArticleDocument).mockRejectedValueOnce(new Error("写入失败"));
-    await launch(); await scrape(); chooseAuto(); click("review"); await ready();
+    await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
     expect(stored().markdown).toBe("已完成的审阅正文"); expect(stored().textReviewed).toBe(true);
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
     expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("自动保存失败"), 7000, "error");
   });
   it("keeps successful saves when index refresh fails and retries only the index", async () => {
     localize(); vi.mocked(refreshCategoryIndex).mockRejectedValueOnce(new Error("目录失败"));
-    await launch(); await scrape(); chooseAuto(); click("save"); await ready();
+    await launch(); await scrape(); await chooseAuto(); click("save"); await ready();
     expect(stored().savedDocumentId).toBe("20260101000000-eeeeeee"); expect(stored().savedContentChanged).toBe(false);
     expect(document.querySelector<HTMLButtonElement>('[data-action="retryIndex"]')!.hidden).toBe(false);
     click("retryIndex"); await ready();

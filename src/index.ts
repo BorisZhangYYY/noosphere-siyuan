@@ -115,6 +115,17 @@ export default class NoospherePlugin extends Plugin {
     );
     await this.historyStore.load();
     const currentDraft = this.draftStore.current;
+    // 全局配置优先；仅在首次升级且未配置时采用旧草稿的根，历史文章不能改动设置。
+    if (saved?.classificationSettingsVersion !== 1) {
+      this.settings.rootDocumentId ||= currentDraft?.rootDocumentId?.trim() || "";
+      this.settings.autoCreateIndex = saved?.autoCreateIndex ?? currentDraft?.autoCreateIndex ?? false;
+      this.settings.classificationSettingsVersion = 1;
+      try {
+        const { outputLanguage: _outputLanguage, ...config } = this.settings;
+        const result = await this.saveOwnedData(STORAGE_NAME, config) as { code?: number; msg?: string };
+        if (result?.code !== 0) throw new Error(result?.msg || "配置迁移失败");
+      } catch (error) { showMessage(`分类设置迁移尚未保存，请在设置页保存：${String(error)}`, 7000, "error"); }
+    }
     const historyId = this.historyStore.migrate(currentDraft);
     if (currentDraft && historyId) {
       const entry = this.historyStore.entries.find(item => item.id === historyId);
@@ -325,12 +336,13 @@ export default class NoospherePlugin extends Plugin {
       auto.checked = mode === "auto";
       renderSaveMode();
     };
-    /** 自动分类时手动目标置灰但仍保留，切回手动可继续用原位置。 */
+    /** 自动分类只展示全局配置，文章页不能修改根目录。 */
     const renderSaveMode = (): void => {
       const auto = saveMode() === "auto";
       const find = (name: string): HTMLElement | null => root.querySelector<HTMLElement>(`[data-role="${name}"]`);
       (find("targetField") as HTMLElement).hidden = auto;
-      (find("rootField") as HTMLElement).hidden = !auto;
+      (find("rootSummaryField") as HTMLElement).hidden = !auto;
+      (find("rootSummary") as HTMLElement).textContent = this.settings.rootDocumentId || "未设置";
       action("retryIndex").hidden = !indexDocumentId;
     };
     const sourceAuthor = field<HTMLInputElement>("sourceAuthor");
@@ -361,8 +373,8 @@ export default class NoospherePlugin extends Plugin {
       syncSecretPreview(input);
     };
     target.value = draft?.targetDocumentId || "";
-    rootDocument.value = draft?.rootDocumentId || this.settings.rootDocumentId || "";
-    autoCreateIndex.checked = draft?.autoCreateIndex ?? this.settings.autoCreateIndex;
+    rootDocument.value = this.settings.rootDocumentId || "";
+    autoCreateIndex.checked = this.settings.autoCreateIndex;
     setSaveMode(draft?.saveMode || this.settings.saveMode || "manual");
     inputUrl.value = draft?.url || "";
     markdown.value = draft?.markdown || "";
@@ -376,8 +388,6 @@ export default class NoospherePlugin extends Plugin {
         updateActions();
       });
     });
-    rootDocument.addEventListener("input", () => { classification = undefined; renderSaveMode(); persistDraft(); updateActions(); });
-    autoCreateIndex.addEventListener("change", () => persistDraft());
     modelFormat.value = this.settings.modelFormat;
     modelVisionCapable.checked = this.settings.modelVisionCapable;
     modelProvider.value = this.settings.activeProvider;
@@ -463,7 +473,7 @@ export default class NoospherePlugin extends Plugin {
       role("reviewInfo").hidden = !role("reviewInfo").textContent;
     };
     const snapshotDraft = (): CaptureDraft => ({ version: 1, updatedAt: Date.now(), url: inputUrl.value, article, markdown: markdown.value,
-      reviewedMarkdown, imageDecisions, targetDocumentId: target.value, rootDocumentId: rootDocument.value, autoCreateIndex: autoCreateIndex.checked, autoSave, indexDocumentId, perspective: workPerspective.value, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value), savedDocumentId, savedContentChanged, reviewInfo, textReviewed, historyId, bodyEdited, saveMode: saveMode(), classification,
+      reviewedMarkdown, imageDecisions, targetDocumentId: target.value, autoSave, indexDocumentId, perspective: workPerspective.value, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value), savedDocumentId, savedContentChanged, reviewInfo, textReviewed, historyId, bodyEdited, saveMode: saveMode(), classification,
       editorState: editorState?.markdown === markdown.value ? editorState : undefined });
     /** 旧版本对重复图片的判断统一后，同步显示正文，保留人工编辑的原生格式。 */
     const repairImageChoices = (previous: ImageDecision[]): boolean => {
@@ -573,7 +583,7 @@ export default class NoospherePlugin extends Plugin {
       action("cancelReview").disabled = !reviewing || !!reviewController?.signal.aborted;
       const autoMode = saveMode() === "auto";
       action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim()
-        || (autoMode ? !rootDocument.value.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
+        || (autoMode ? !this.settings.rootDocumentId.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("retryIndex").disabled = busy || !indexDocumentId;
       action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
       for (const name of ["settings", "toggleSettings", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
@@ -592,7 +602,7 @@ export default class NoospherePlugin extends Plugin {
       field<HTMLTextAreaElement>("perspectiveEditor").readOnly = !activeCustom;
       field<HTMLTextAreaElement>("templateEditor").readOnly = !activeCustom;
     };
-    /** 历史只切换文章内容，模型设置继续沿用当前工作空间配置。 */
+    /** 历史只切换文章内容，模型及分类设置继续沿用当前工作空间配置。 */
     const showHistory = (visible: boolean): void => {
       finishArticleEditing();
       const previous = historyVisible;
@@ -627,8 +637,6 @@ export default class NoospherePlugin extends Plugin {
       classification = restored.classification;
       autoSave = restored.autoSave;
       indexDocumentId = restored.indexDocumentId;
-      autoCreateIndex.checked = restored.autoCreateIndex ?? this.settings.autoCreateIndex;
-      rootDocument.value = restored.rootDocumentId || this.settings.rootDocumentId || "";
       setSaveMode(restored.saveMode || this.settings.saveMode || "manual");
       savedContentChanged = restored.savedContentChanged || false;
       repairImageChoices(restored.imageDecisions);
@@ -836,6 +844,7 @@ export default class NoospherePlugin extends Plugin {
         customPerspectives: customPerspectives.map(item => ({ ...item, sections: undefined })),
         targetDocumentId: "",
         rootDocumentId: field("rootDocumentId").value.trim(),
+        classificationSettingsVersion: 1,
         saveMode: saveMode(),
         autoCreateIndex: autoCreateIndex.checked,
       };
@@ -864,6 +873,7 @@ export default class NoospherePlugin extends Plugin {
       if (this.uninstalled) throw new Error("知流已卸载");
       if (result?.code !== 0) throw new Error(result?.msg || "配置保存失败");
       this.settings = next;
+      renderSaveMode();
       setupBaseline = cloneSettings(next);
       refreshSettingsState();
       return next;
@@ -1541,7 +1551,10 @@ export default class NoospherePlugin extends Plugin {
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
         if (!settings.modelKey || !settings.modelName) { showView("setup"); throw new Error("请先配置模型 API Key 和模型名称"); }
         // 自动模式先检查锚点，配置错误时不消耗模型请求。
-        if (saveMode() === "auto") await locateDocument(rootDocument.value.trim(), signal);
+        if (saveMode() === "auto") {
+          if (!settings.rootDocumentId) throw new Error("请先在设置 → 分类设置中配置分类根目录");
+          await locateDocument(settings.rootDocumentId, signal);
+        }
         throwIfCancelled(signal);
         let textReceived = false;
         streamTitle = article.title;
@@ -1647,8 +1660,9 @@ export default class NoospherePlugin extends Plugin {
     const saveArticle = async (): Promise<string> => {
       const autoMode = saveMode() === "auto";
       const manualDocumentId = target.value.trim();
-      const rootDocumentId = rootDocument.value.trim();
-      await saveSettings();
+      const settings = await saveSettings();
+      const rootDocumentId = settings.rootDocumentId;
+      if (autoMode && !rootDocumentId) throw new Error("请先在设置 → 分类设置中配置分类根目录");
       if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
       let anchor = autoMode ? await locateDocument(rootDocumentId) : undefined;
       let classificationPlan: ClassificationPlan | undefined;

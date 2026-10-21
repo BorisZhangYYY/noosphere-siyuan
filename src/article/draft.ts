@@ -24,7 +24,7 @@ export interface CaptureDraft {
   reviewedMarkdown: string;
   imageDecisions: ImageDecision[];
   targetDocumentId: string;
-  /** 自动分类的根文档随文章保留，换文章不会丢失之前填写的根。 */
+  /** 仅兼容旧草稿并供一次性迁移读取；新草稿不再保存全局分类设置。 */
   rootDocumentId?: string;
   autoCreateIndex?: boolean;
   /** 仅自动落库记录可用于更新绑定，不能使用手动追加的文档 ID。 */

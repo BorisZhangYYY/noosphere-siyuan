@@ -18,8 +18,10 @@ export interface Settings {
   modelVisionCapable: boolean;
   customPerspectives: ReviewPerspective[];
   targetDocumentId: string;
-  /** 分类根文档：自动分类落库的兜底位置，也是分类文档的父级。 */
+  /** 分类根目录由设置页统一管理，文章和历史不再覆盖它。 */
   rootDocumentId: string;
+  /** 已完成旧草稿分类配置的一次性迁移，避免主动清空后又恢复旧值。 */
+  classificationSettingsVersion?: 1;
   /** 手动指定文档保持原有追加语义；自动分类由 AI 选分类后按标题落库。 */
   saveMode: SaveMode;
   /** 开启后，在首次落库的分类文档末尾创建受管目录。 */
@@ -73,6 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
   customPerspectives: [],
   targetDocumentId: "",
   rootDocumentId: "",
+  classificationSettingsVersion: 1,
   saveMode: "manual",
   autoCreateIndex: false,
 };
