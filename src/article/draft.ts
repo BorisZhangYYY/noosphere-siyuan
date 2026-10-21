@@ -26,6 +26,11 @@ export interface CaptureDraft {
   targetDocumentId: string;
   /** 自动分类的根文档随文章保留，换文章不会丢失之前填写的根。 */
   rootDocumentId?: string;
+  autoCreateIndex?: boolean;
+  /** 仅自动落库记录可用于更新绑定，不能使用手动追加的文档 ID。 */
+  autoSave?: { rootId: string; documentId: string; sourceKey: string };
+  /** 目录失败时保留重试目标，文章落库结果不受影响。 */
+  indexDocumentId?: string;
   perspective: string;
   outputLanguage?: import("../review/language").OutputLanguage;
   savedDocumentId: string;
@@ -61,6 +66,10 @@ export function validDraft(value: unknown): value is CaptureDraft {
     && (draft.bodyEdited === undefined || typeof draft.bodyEdited === "boolean")
     && (draft.savedContentChanged === undefined || typeof draft.savedContentChanged === "boolean")
     && (draft.saveMode === undefined || draft.saveMode === "manual" || draft.saveMode === "auto")
+    && (draft.rootDocumentId === undefined || typeof draft.rootDocumentId === "string")
+    && (draft.autoCreateIndex === undefined || typeof draft.autoCreateIndex === "boolean")
+    && (draft.indexDocumentId === undefined || typeof draft.indexDocumentId === "string")
+    && (draft.autoSave === undefined || (!!draft.autoSave && [draft.autoSave.rootId, draft.autoSave.documentId, draft.autoSave.sourceKey].every(item => typeof item === "string")))
     && (draft.classification === undefined
       || (typeof draft.classification === "object" && draft.classification !== null
         && (draft.classification.categoryId === null || typeof draft.classification.categoryId === "string")

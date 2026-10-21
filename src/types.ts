@@ -2,6 +2,7 @@
 export interface Settings {
   topBarPosition: "left" | "right";
   reviewPerspective: string;
+  /** 单次审阅的语言参数，不作为全局设置持久化。 */
   outputLanguage: import("./review/language").OutputLanguage;
   firecrawlKey: string;
   modelBaseUrl: string;
@@ -9,6 +10,8 @@ export interface Settings {
   modelName: string;
   modelFormat: "openai_chat" | "openai_responses" | "anthropic" | "google";
   activeProvider: import("./review/providers").ProviderId;
+  customProviders: import("./review/providers").CustomProvider[];
+  providerOrder: import("./review/providers").ProviderId[];
   modelProfiles: Partial<Record<import("./review/providers").ProviderId, import("./review/providers").ModelProfile>>;
   imageProvider: import("./review/providers").ProviderId | "";
   imageReview: boolean;
@@ -19,6 +22,8 @@ export interface Settings {
   rootDocumentId: string;
   /** 手动指定文档保持原有追加语义；自动分类由 AI 选分类后按标题落库。 */
   saveMode: SaveMode;
+  /** 开启后，在首次落库的分类文档末尾创建受管目录。 */
+  autoCreateIndex: boolean;
 }
 
 export type SaveMode = "manual" | "auto";
@@ -60,6 +65,8 @@ export const DEFAULT_SETTINGS: Settings = {
   modelFormat: "openai_chat",
   activeProvider: "custom",
   modelProfiles: {},
+  customProviders: [],
+  providerOrder: [],
   imageProvider: "",
   imageReview: false,
   modelVisionCapable: false,
@@ -67,4 +74,5 @@ export const DEFAULT_SETTINGS: Settings = {
   targetDocumentId: "",
   rootDocumentId: "",
   saveMode: "manual",
+  autoCreateIndex: false,
 };

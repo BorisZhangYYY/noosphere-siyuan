@@ -29,15 +29,30 @@ Capture new articles at the top, read and edit the body on the left, and review 
 2. Configure your Firecrawl API key. Configure text and optional vision models if you want AI review.
 3. Paste a URL at the top and capture it. Inspect the article on the left; click Edit to make changes, then Confirm to keep them.
 4. Optionally choose a review perspective and output language on the right, then start AI review. Click an image thumbnail to inspect it and select its checkbox to remove it.
-5. Copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
+5. In manual mode, copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
+6. For AI classification, enter a **notebook or root-document ID** as the anchor. Once both text and image review finish successfully, the article is classified and saved automatically. Cancellation or review failure does not save it; a failed save keeps the completed review for retry.
 
-The plugin creates no draft documents, notebooks or folders. Each article keeps its own destination choice. Saving changed content to an existing document appends another import; it does not synchronize with an earlier import.
+### Prepare categories
+
+- Create category documents below the anchor and give each a nonempty `custom-zl-category` attribute. The first body paragraph supplies the description; `custom-zl-desc` can override it. Only categories within the selected subtree participate, with their full paths.
+- Enable automatic directory creation to append a managed index below each category introduction on its first article save. Alternatively, mark an existing list block with a nonempty `custom-zl-index` attribute. Saving or opening the document refreshes its marked index; a failed refresh can be retried separately.
+- Unmatched articles and classification-service failures save into a separate article document at the anchor root, with an explanation. Repeated saves of the same source update the existing article, even after a title change. Different sources with identical titles get separate document names; unrelated notes are preserved.
+
+Perspectives and article formats apply when you start AI review. Captured articles can also be saved directly. The original-author and novice perspectives are built in, read-only and cannot be deleted; add a custom perspective to make adjustments.
+
+Choose the output language in the workbench: follow the SiYuan interface (default), keep the source language, Simplified Chinese or English. The choice belongs to the current article and is retained in its history. New articles default to the interface language; an empty workbench also lets you choose a language before capturing. You can add, rename and delete named custom providers with separate credentials and models; built-in providers cannot be deleted.
+
+Use Save beside the Settings heading; it stays visible while scrolling and keeps you on the settings page. After the status shows saved, use Return to Workbench. Empty API keys start visible while typing; stored keys start hidden and the eye button toggles visibility.
+
+Drag providers to reorder them, then save Settings to keep the order. You can also focus a provider and use Alt/Option + Up/Down.
+
+The plugin creates no extra draft documents or notebooks. Manual mode retains per-article destinations and appends imports. Automatic mode remembers the anchor and updates the same source article. Changes made after an automatic save can be saved again with Save Article.
 
 Changes between versions are recorded in the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md).
 
 ## Services and data
 
-Capture sends the URL to Firecrawl. AI review sends the article text to your configured text model; vision review sends images and an article summary to your configured image model. Service charges and quotas are determined by the providers.
+Capture sends the URL to Firecrawl. AI review sends the article text to your configured text model; automatic classification also sends category paths, descriptions and an article excerpt to that model; vision review sends images and an article summary to your configured image model. Service charges and quotas are determined by the providers.
 
 Settings, API keys and article records are stored in the current workspace's plugin storage. Imported text and downloaded images are stored in SiYuan documents and assets. Closing, disabling or upgrading the plugin preserves article records.
 
