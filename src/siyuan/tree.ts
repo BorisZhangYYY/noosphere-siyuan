@@ -4,6 +4,8 @@ import { locateDocument, parentDocumentId, rootCondition, SIYUAN_ID, sqlLiteral,
 
 export const CATEGORY_ATTR = "custom-zl-category";
 export const INDEX_ATTR = "custom-zl-index";
+export const INDEX_ENABLED_ATTR = "custom-zl-index-enabled";
+const INDEX_SIGNATURE_ATTR = "custom-zl-index-signature";
 export const READONLY_ATTR = "custom-sy-readonly";
 export interface CategoryNode { id: string; name: string; description: string; path: string; parentId: string }
 interface SqlRow { id: string; box: string; path: string; hpath: string; content: string; ial: string; type: string }
@@ -59,10 +61,40 @@ export function classificationCandidates(nodes: CategoryNode[]): Array<{ id: str
   return nodes.filter(node => node.name && node.id).map(node => ({ id: node.id, path: node.path || node.name, description: node.description }));
 }
 
-export interface CategoryIndexItem { id: string; title: string }
-export function renderCategoryIndex(items: CategoryIndexItem[]): string {
-  return items.filter(item => item.id && item.title).map(item => `* [${item.title.replace(/([\\`*_{}\[\]()#+.!>|-])/g, "\\$1")}](siyuan://blocks/${item.id})`).join("\n");
+export interface CategoryIndexItem { id: string; title: string; children?: CategoryIndexItem[] }
+/** 原生动态块引用与目录插件一致；链接文字不再是可单独编辑的普通超链接。 */
+export function renderCategoryIndex(items: CategoryIndexItem[], depth = 0): string {
+  const html = (text: string): string => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  return items.filter(item => SIYUAN_ID.test(item.id) && item.title).map(item =>
+    `${"    ".repeat(depth)}* <span data-type="block-ref" data-id="${item.id}" data-subtype="d">${html(item.title)}</span>`
+    + (item.children?.length ? `\n${renderCategoryIndex(item.children, depth + 1)}` : "")).join("\n");
 }
+
+/** 沿思源真实文档树递归，保留目录排序、全部层级，并拒绝重复节点。 */
+async function indexItems(location: DocumentLocation, visited = new Set<string>()): Promise<CategoryIndexItem[]> {
+  if (visited.has(location.id)) return [];
+  visited.add(location.id);
+  const result = await kernelPost<{ files: Array<{ id: string; name: string; path?: string; subFileCount?: number }> }>("/api/filetree/listDocsByPath", {
+    notebook: location.notebook, path: location.path, maxListCount: 0,
+  });
+  const items: CategoryIndexItem[] = [];
+  for (const child of result.files) {
+    if (!SIYUAN_ID.test(child.id) || visited.has(child.id)) continue;
+    const childPath = child.path || `${location.path.replace(/\.sy$/, "")}/${child.id}.sy`;
+    if (!withinRoot({ notebook: location.notebook, path: childPath }, location)) continue;
+    items.push({ id: child.id, title: child.name.replace(/\.sy$/, ""), children: (child.subFileCount ?? 0) > 0
+      ? await indexItems({ ...location, id: child.id, path: childPath }, visited) : [] });
+  }
+  return items;
+}
+
+/** 非安全用途的内容签名，仅用于避免无变化的目录反复写入与触发界面重载。 */
+function indexSignature(items: CategoryIndexItem[]): string {
+  let hash = 2166136261;
+  for (const character of JSON.stringify(items)) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  return (hash >>> 0).toString(16);
+}
+function itemIds(items: CategoryIndexItem[]): string[] { return items.flatMap(item => [item.id, ...itemIds(item.children || [])]); }
 
 const indexUpdates = new Map<string, Promise<string | null>>();
 
@@ -75,29 +107,39 @@ export async function refreshCategoryIndex(categoryDocId: string, options: { cre
   try { return await pending; } finally { if (indexUpdates.get(categoryDocId) === pending) indexUpdates.delete(categoryDocId); }
 }
 
-/** 列举文档树而非正文块；只在用户启用创建时追加一个受管块。 */
+/** 递归维护受管块；无变化不重写，目录被删后按文档上的启用标记恢复。 */
 async function updateCategoryIndex(categoryDocId: string, create: boolean): Promise<string | null> {
   await kernelPost("/api/sqlite/flushTransaction", {});
   const rows = await kernelPost<SqlRow[]>("/api/query/sql", {
     stmt: `SELECT id, ial, type FROM blocks WHERE root_id = ${sqlLiteral(categoryDocId)} AND type != 'd' AND ial LIKE '%${INDEX_ATTR}%' ORDER BY updated DESC LIMIT 100`,
   });
   const block = rows.find(row => attrFromIal(row.ial, INDEX_ATTR));
-  if (!block && !create) return null;
+  const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: categoryDocId });
+  if (!block && !create && attrs[INDEX_ENABLED_ATTR] !== "true") return null;
   const location = await locateDocument(categoryDocId);
-  const children = await kernelPost<{ files: Array<{ id: string; name: string }> }>("/api/filetree/listDocsByPath", {
-    notebook: location.notebook, path: location.path, maxListCount: 0,
-  });
-  const data = renderCategoryIndex(children.files.map(child => ({ id: child.id, title: child.name.replace(/\.sy$/, "") }))) || "暂无子文档。";
+  const items = await indexItems(location);
+  const data = renderCategoryIndex(items) || "暂无子文档。";
+  const signature = indexSignature(items);
+  const docAttrs: Record<string, string> = {};
+  if (attrs[INDEX_ENABLED_ATTR] !== "true") docAttrs[INDEX_ENABLED_ATTR] = "true";
+  // 明确解锁后的 false 必须保留；文章文档不参与锁定。
+  if (!attrs[READONLY_ATTR]) docAttrs[READONLY_ATTR] = "true";
   let id = block?.id;
+  if (id && attrFromIal(block!.ial, INDEX_SIGNATURE_ATTR) === signature) {
+    const current = await kernelPost<{ kramdown: string }>("/api/block/getBlockKramdown", { id });
+    const references = Array.from(current.kramdown.matchAll(/\(\((\d{14}-[a-z0-9]{7})[\s)]/g), match => match[1]);
+    if (JSON.stringify(references) === JSON.stringify(itemIds(items)) && (items.length || current.kramdown.includes("暂无子文档。"))) {
+      if (Object.keys(docAttrs).length) await kernelPost("/api/attr/setBlockAttrs", { id: categoryDocId, attrs: docAttrs });
+      return id;
+    }
+  }
   if (id) await kernelPost("/api/block/updateBlock", { id, dataType: "markdown", data });
   else {
     const result = await kernelPost<Array<{ doOperations?: Array<{ id?: string; action?: string }> }>>("/api/block/appendBlock", { parentID: categoryDocId, dataType: "markdown", data });
     id = result.flatMap(item => item.doOperations || []).find(op => op.id && op.action !== "delete")?.id;
     if (!id) throw new Error("思源未确认目录块创建结果");
   }
-  await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [INDEX_ATTR]: "true" } });
-  // 使用思源原生文档锁；明确解锁后的 "false" 必须保留，后台目录更新不受锁定影响。
-  const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: categoryDocId });
-  if (!attrs[READONLY_ATTR]) await kernelPost("/api/attr/setBlockAttrs", { id: categoryDocId, attrs: { [READONLY_ATTR]: "true" } });
+  await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [INDEX_ATTR]: "true", [INDEX_SIGNATURE_ATTR]: signature } });
+  if (Object.keys(docAttrs).length) await kernelPost("/api/attr/setBlockAttrs", { id: categoryDocId, attrs: docAttrs });
   return id;
 }

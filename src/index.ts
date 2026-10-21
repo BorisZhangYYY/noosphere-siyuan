@@ -9,8 +9,11 @@ import { configuredProfiles, isCustomProvider, moveProvider, orderedProviderIds,
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { articleIdentity, ensureArticleDocument, findArticleDocument } from "./siyuan/destination";
 import { locateDocument, parentDocumentId } from "./siyuan/location";
-import { discoverCategories, refreshCategoryIndex } from "./siyuan/tree";
-import { classifyArticle, type ClassificationResult } from "./review/classify";
+import { refreshCategoryIndex } from "./siyuan/tree";
+import { CategoryIndexMaintenance } from "./siyuan/index-maintenance";
+import { CategoryIndexReadonly } from "./siyuan/index-readonly";
+import type { ClassificationResult } from "./review/classify";
+import { prepareClassification, validateClassification, type ClassificationPlan } from "./review/classification-plan";
 import { removePluginStorage } from "./siyuan/cleanup";
 import { DEFAULT_SETTINGS, type Article, type ReviewPerspective, type Settings } from "./types";
 import { captureContent } from "./ui";
@@ -38,6 +41,9 @@ export default class NoospherePlugin extends Plugin {
     if (id) void refreshCategoryIndex(id).catch(error => showMessage(`目录更新失败，重新打开文档可重试：${String(error)}`, 7000, "error"));
   };
   private settings: Settings = { ...DEFAULT_SETTINGS };
+  private readonly indexMaintenance = new CategoryIndexMaintenance(() => this.settings,
+    error => showMessage(`目录同步失败：${String(error)}`, 7000, "error"));
+  private readonly indexReadonly = new CategoryIndexReadonly(document);
   private captureDialog: Dialog | null = null;
   private captureBusy = false;
   private resumeCaptureDialog: (() => void) | null = null;
@@ -68,7 +74,9 @@ export default class NoospherePlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    this.indexReadonly.start();
     this.eventBus.on("loaded-protyle-static", this.onCategoryDocumentLoaded);
+    this.eventBus.on("ws-main", this.indexMaintenance.onMessage);
     // A compact rendition of the existing Noosphere globe mark, without its shadow.
     this.addIcons(`<symbol id="iconNoosphere" viewBox="0 0 64 64"><circle cx="32" cy="32" r="27" fill="#4D98CA"/><path fill="#D7EBC6" d="M14.4 20.5c3.5-6 9.3-10.3 16.1-11.2l2.2 4.1-4.5 2.2-2.4 4.8-5.2 1.7-2.2 4.1-4.7-.8.7-4.9Zm20.8 7.1 5.5-4.2 6.4 1.3 3.7 4.6-1.7 4.4-5.5 1.1-2.6 5-4.6-1.1-2.9-5.8 1.7-5.3ZM20.6 36l5.8-1.4 5 3.6-.7 5.1-4.4 2.3-1.1 7.1A23.2 23.2 0 0 1 12 36.4l3.2 1.8 5.4-2.2Z"/><path fill="none" stroke="#F4FAFF" stroke-linecap="round" stroke-width="1.5" opacity=".65" d="M9.2 32h45.6M32 5.2c8.2 7.1 12.4 16 12.4 26.8S40.2 51.7 32 58.8M32 5.2C23.8 12.3 19.6 21.2 19.6 32S23.8 51.7 32 58.8"/><circle cx="32" cy="32" r="27" fill="none" stroke="#EAF6FF" stroke-width="1.5"/></symbol>`);
     this.addCommand({
@@ -82,6 +90,7 @@ export default class NoospherePlugin extends Plugin {
       ? saved.customPerspectives.filter(item => item && item.id !== "legacy_guidance" && /^[a-z0-9_-]+$/.test(item.id)).map(migratePerspective)
       : [];
     this.settings = { ...DEFAULT_SETTINGS, ...(saved || {}), ...restoreProviders(saved), outputLanguage: "follow_ui", reviewPerspective: saved?.reviewPerspective && saved.reviewPerspective !== "raw" && saved.reviewPerspective !== "legacy_guidance" ? saved.reviewPerspective : "original", customPerspectives };
+    this.indexMaintenance.schedule();
     let recovery: Storage | undefined;
     try { recovery = window.localStorage; } catch { /* 浏览器不允许本地缓存时仍保存到思源。 */ }
     const workspaceId = (window as unknown as { siyuan?: { config?: { system?: { workspaceDir?: string } } } }).siyuan?.config?.system?.workspaceDir || window.location.origin;
@@ -156,7 +165,10 @@ export default class NoospherePlugin extends Plugin {
   }
 
   onunload(): void {
+    this.indexReadonly.stop();
     this.eventBus.off("loaded-protyle-static", this.onCategoryDocumentLoaded);
+    this.eventBus.off("ws-main", this.indexMaintenance.onMessage);
+    this.indexMaintenance.stop();
     this.cancelActiveReview?.();
     this.captureDialog?.destroy();
     this.resumeCaptureDialog = null;
@@ -319,19 +331,6 @@ export default class NoospherePlugin extends Plugin {
       const find = (name: string): HTMLElement | null => root.querySelector<HTMLElement>(`[data-role="${name}"]`);
       (find("targetField") as HTMLElement).hidden = auto;
       (find("rootField") as HTMLElement).hidden = !auto;
-      (find("indexOption") as HTMLElement).hidden = !auto;
-      const note = find("classifyNote") as HTMLElement;
-      // 分类理由可展开阅读，长说明不会持续挤占审阅操作区。
-      (find("classifyDetails") as HTMLElement).hidden = !auto;
-      (find("classifySummary") as HTMLElement).textContent = classification
-        ? (classification.categoryId ? "查看分类原因" : "已保存到根目录，查看原因")
-        : "审阅后自动归类并保存";
-      note.hidden = !auto;
-      note.textContent = auto
-        ? classification
-          ? (classification.categoryId ? `上次归类：${classification.reason}` : `未归类到分类：${classification.reason}`)
-          : "整次审阅成功后自动归类并保存；后续修改更新同一篇文章。"
-        : "";
       action("retryIndex").hidden = !indexDocumentId;
     };
     const sourceAuthor = field<HTMLInputElement>("sourceAuthor");
@@ -745,11 +744,11 @@ export default class NoospherePlugin extends Plugin {
       imageDecisionList.replaceChildren();
       if (!imageDecisions.length && article) imageDecisions = imageInventory(markdown.value, article.url);
       const removed = imageDecisions.filter(item => item.remove).length;
-      const reviewed = imageDecisions.filter(item => imageDecisionStatus(item) === "reviewed").length;
-      const failed = imageDecisions.filter(item => imageDecisionStatus(item) === "failed").length;
-      const pending = imageDecisions.length - reviewed - failed;
+      const reviewed = imageDecisions.filter(item => !item.remove && imageDecisionStatus(item) === "reviewed").length;
+      const failed = imageDecisions.filter(item => !item.remove && imageDecisionStatus(item) === "failed").length;
+      const pending = imageDecisions.length - removed - reviewed - failed;
       role("assetCount").textContent = String(imageDecisions.length - removed);
-      imageDecisionCount.textContent = imageDecisions.length ? `已审阅 ${reviewed} · 待审阅 ${pending} · 失败 ${failed}${removed ? ` · 移除 ${removed}` : ""}` : article ? "这篇文章没有图片。" : "抓取后展示文章图片。";
+      imageDecisionCount.textContent = imageDecisions.length ? `已审阅 ${reviewed} · 待审阅 ${pending} · 失败 ${failed} · 移除 ${removed}` : article ? "这篇文章没有图片。" : "抓取后展示文章图片。";
       for (const [index, decision] of imageDecisions.entries()) {
         const row = document.createElement("div");
         row.className = "noosphere__asset";
@@ -951,7 +950,7 @@ export default class NoospherePlugin extends Plugin {
         else { status.hidden = true; statusText.textContent = ""; }
         if (isReview && dialogClosed) showMessage(`「${article?.title || "文章"}」${message}`, 7000);
         if (isReview) {
-          const failed = imageDecisions.filter(item => imageDecisionStatus(item) === "failed").length;
+          const failed = imageDecisions.filter(item => !item.remove && imageDecisionStatus(item) === "failed").length;
           setReviewProgress(failed ? `已结束 · ${failed} 张识别失败` : "审阅完成", 100, "100%");
         }
       } catch (error) {
@@ -1651,7 +1650,8 @@ export default class NoospherePlugin extends Plugin {
       const rootDocumentId = rootDocument.value.trim();
       await saveSettings();
       if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
-      const anchor = autoMode ? await locateDocument(rootDocumentId) : undefined;
+      let anchor = autoMode ? await locateDocument(rootDocumentId) : undefined;
+      let classificationPlan: ClassificationPlan | undefined;
       if (!autoMode) await validateTargetDocument(manualDocumentId);
       if (this.uninstalled) throw new Error("知流已卸载");
       let decision: ClassificationResult = { categoryId: null, confidence: 0, reason: "没有已配置的分类" };
@@ -1667,17 +1667,12 @@ export default class NoospherePlugin extends Plugin {
           decision = classification || { categoryId: parentId === anchor.id ? null : parentId, confidence: 1, reason: "更新此前自动保存的文章" };
           where = "此前自动保存的位置";
         } else {
-          try {
-            const categories = await discoverCategories(anchor);
-            if (categories.length) {
-              setStatus("正在选择分类…");
-              decision = await classifyArticle(article.title, markdown.value, categories, this.settings);
-            }
-            parentId = decision.categoryId || anchor.id;
-            where = categories.find(item => item.id === decision.categoryId)?.path || "分类根";
-          } catch (error) {
-            decision = { categoryId: null, confidence: 0, reason: `分类失败：${error instanceof Error ? error.message : String(error)}` };
-          }
+          setStatus("正在选择分类…");
+          classificationPlan = await prepareClassification(rootDocumentId, article, markdown.value, this.settings);
+          anchor = classificationPlan.root;
+          decision = classificationPlan.decision;
+          parentId = decision.categoryId || anchor.id;
+          where = classificationPlan.where;
         }
       }
       if (this.uninstalled) throw new Error("知流已卸载");
@@ -1698,11 +1693,17 @@ export default class NoospherePlugin extends Plugin {
         showMessage(`${result.warnings.length} 张图片未能保存到思源，正文仍保留原链接。${result.warnings[0]}`, 7000, "error");
       }
       if (anchor) {
+        if (classificationPlan) {
+          classificationPlan = await validateClassification(classificationPlan, article, content, this.settings);
+          anchor = classificationPlan.root; decision = classificationPlan.decision;
+          parentId = decision.categoryId || anchor.id; where = classificationPlan.where;
+        }
+        const rootId = anchor.id;
         const sourceKey = articleIdentity(article);
         const written = await ensureArticleDocument(parentId, article, content, {
           root: anchor, existingId, blockDOM: editorState?.blockDOM,
           onCreated: documentId => {
-            autoSave = { rootId: anchor.id, documentId, sourceKey };
+            autoSave = { rootId, documentId, sourceKey };
             savedDocumentId = documentId; savedContentChanged = true;
             persistDraft(); renderSavedLocation();
           },
@@ -1723,7 +1724,7 @@ export default class NoospherePlugin extends Plugin {
           }
         }
         persistDraft(); renderSaveMode();
-        return `已按「${where}」${written.created ? "新建并保存" : "更新保存"}${note}。点击“打开文档”查看。`;
+        return `已按「${where}」${written.created ? "新建并保存" : "更新保存"}${note}。${decision.categoryId ? "" : decision.reason + "。"}点击“打开文档”查看。`;
       }
       await appendArticle(manualDocumentId, article, content, editorState?.blockDOM);
       savedDocumentId = manualDocumentId; savedContentChanged = false;

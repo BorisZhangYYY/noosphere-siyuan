@@ -34,6 +34,7 @@ vi.mock("../src/siyuan/writer", () => ({ validateTargetDocument: vi.fn(), append
 vi.mock("../src/siyuan/tree", () => ({ discoverCategories: vi.fn(), refreshCategoryIndex: vi.fn() }));
 vi.mock("../src/siyuan/destination", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/destination")>(), findArticleDocument: vi.fn(), ensureArticleDocument: vi.fn() }));
 vi.mock("../src/siyuan/location", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/location")>(), locateDocument: vi.fn() }));
+vi.mock("../src/siyuan/index-maintenance", () => ({ CategoryIndexMaintenance: class { onMessage = vi.fn(); schedule = vi.fn(); stop = vi.fn(); } }));
 vi.mock("../src/review/classify", () => ({ classifyArticle: vi.fn() }));
 // 原生键盘行为在思源现场验收；这里验证工作台与原生编辑器之间的数据和生命周期。
 vi.mock("../src/article/editor", async importOriginal => ({
@@ -100,6 +101,16 @@ function historyAction(operation: string, index = 0): void {
 }
 
 describe("workbench regression", () => {
+  it("keeps assets collapsed with review status visible and shares the save scroller", async () => {
+    await launch(); await scrape();
+    const assets = document.querySelector<HTMLDetailsElement>('[data-role="imageDecisions"]')!;
+    expect(assets.tagName).toBe("DETAILS"); expect(assets.open).toBe(false);
+    expect(assets.querySelector("summary")!.textContent).toContain("待审阅");
+    expect(assets.closest(".noosphere__inspection-scroll")).toBe(document.querySelector('[aria-label="保存位置"]')!.closest(".noosphere__inspection-scroll"));
+    expect(document.querySelector('[data-role="classifyDetails"]')).toBeNull();
+    expect(document.querySelector('[data-field="autoCreateIndex"]')!.closest('[data-view="setup"]')).not.toBeNull();
+  });
+
   beforeEach(() => {
     fixtures.files.clear(); fixtures.dialogs.length = 0; fixtures.messages.mockClear(); document.body.replaceChildren(); localStorage.clear();
     fixtures.files.set("settings.json", { ...DEFAULT_SETTINGS, firecrawlKey: "test", modelKey: "test", modelName: "test", reviewPerspective: "original" });

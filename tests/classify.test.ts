@@ -193,12 +193,12 @@ describe("source-based article saves", () => {
 describe("managed category indexes", () => {
   const marker = { id: index, type: 'l', ial: '{: custom-zl-index="true"}' };
   it("escapes article titles in block links", () => {
-    expect(renderCategoryIndex([{ id: ai, title: 'A *B* [C]' }])).toBe(`* [A \\*B\\* \\[C\\]](siyuan://blocks/${ai})`);
+    expect(renderCategoryIndex([{ id: ai, title: '<A> & \"B\"' }])).toContain('&lt;A&gt; &amp; &quot;B&quot;');
   });
   it("uses the file tree API and rewrites only a marked content block", async () => {
     override = path => path === '/api/query/sql' ? [marker] : undefined;
     expect(await refreshCategoryIndex(ai)).toBe(index);
-    expect(calls().find(([p]) => p === '/api/block/updateBlock')![1]).toEqual({ id: index, dataType: 'markdown', data: `* [文章标题](siyuan://blocks/${saved})` });
+    expect(calls().find(([p]) => p === '/api/block/updateBlock')![1]).toEqual({ id: index, dataType: 'markdown', data: `* <span data-type="block-ref" data-id="${saved}" data-subtype="d">文章标题</span>` });
     expect(calls().some(([p]) => p === '/api/block/getChildBlocks')).toBe(false);
   });
   it("does not create a directory without opt-in", async () => {
@@ -207,22 +207,49 @@ describe("managed category indexes", () => {
   it("creates a managed block after opt-in", async () => {
     expect(await refreshCategoryIndex(ai, { create: true })).toBe(index);
     expect(calls().find(([p]) => p === '/api/block/appendBlock')![1]).toMatchObject({ parentID: ai });
-    expect(calls().filter(([p]) => p === '/api/attr/setBlockAttrs').map(([, payload]) => payload)).toContainEqual({ id: ai, attrs: { 'custom-sy-readonly': 'true' } });
+    expect(calls().filter(([p]) => p === '/api/attr/setBlockAttrs').map(([, payload]) => payload)).toContainEqual(expect.objectContaining({ id: ai, attrs: expect.objectContaining({ 'custom-sy-readonly': 'true' }) }));
   });
   it("defaults an existing managed index page to read-only", async () => {
     override = path => path === '/api/query/sql' ? [marker] : undefined;
     await refreshCategoryIndex(ai);
-    expect(calls()).toContainEqual(['/api/attr/setBlockAttrs', { id: ai, attrs: { 'custom-sy-readonly': 'true' } }]);
+    expect(calls()).toContainEqual(['/api/attr/setBlockAttrs', expect.objectContaining({ id: ai, attrs: expect.objectContaining({ 'custom-sy-readonly': 'true' }) })]);
   });
   it.each(['false', 'true'])("preserves an explicit document lock value of %s", async value => {
     override = path => path === '/api/query/sql' ? [marker] : path === '/api/attr/getBlockAttrs' ? { type: 'doc', 'custom-sy-readonly': value } : undefined;
     await refreshCategoryIndex(ai);
-    expect(calls().filter(([p, payload]) => p === '/api/attr/setBlockAttrs' && (payload as any).id === ai)).toHaveLength(0);
+    expect(calls().filter(([p, payload]) => p === '/api/attr/setBlockAttrs' && (payload as any).id === ai && 'custom-sy-readonly' in (payload as any).attrs)).toHaveLength(0);
   });
   it("clears stale entries when the category becomes empty", async () => {
     override = path => path === '/api/query/sql' ? [marker] : path === '/api/filetree/listDocsByPath' ? { files: [] } : undefined;
     await refreshCategoryIndex(ai);
     expect(calls().find(([p]) => p === '/api/block/updateBlock')![1]).toMatchObject({ data: '暂无子文档。' });
+  });
+  it("renders all descendant document levels as native dynamic references", async () => {
+    override = (path, payload) => {
+      if (path === '/api/query/sql') return [marker];
+      if (path === '/api/filetree/listDocsByPath') return payload.path === locations[ai].path
+        ? { files: [{ id: llm, name: '大模型.sy', path: locations[llm].path, subFileCount: 1 }] }
+        : { files: [{ id: saved, name: '深层文章.sy', path: locations[llm].path.replace(/\.sy$/, '') + '/' + saved + '.sy', subFileCount: 0 }] };
+    };
+    await refreshCategoryIndex(ai);
+    const data = (calls().find(([p]) => p === '/api/block/updateBlock')![1] as any).data;
+    expect(data).toContain(`data-id="${llm}"`);
+    expect(data).toContain(`\n    * <span data-type="block-ref" data-id="${saved}"`);
+  });
+  it("recreates a removed managed index from the page's persistent opt-in", async () => {
+    override = path => path === '/api/attr/getBlockAttrs' ? { type: 'doc', 'custom-zl-index-enabled': 'true' } : undefined;
+    expect(await refreshCategoryIndex(ai)).toBe(index);
+    expect(calls().some(([p]) => p === '/api/block/appendBlock')).toBe(true);
+  });
+  it("does not rewrite an unchanged index or create an update loop", async () => {
+    await refreshCategoryIndex(ai, { create: true });
+    const signature = (calls().find(([p, v]) => p === '/api/attr/setBlockAttrs' && (v as any).id === index)![1] as any).attrs['custom-zl-index-signature'];
+    vi.clearAllMocks();
+    override = path => path === '/api/query/sql' ? [{ ...marker, ial: marker.ial + ` custom-zl-index-signature="${signature}"` }]
+      : path === '/api/attr/getBlockAttrs' ? { type: 'doc', 'custom-zl-index-enabled': 'true', 'custom-sy-readonly': 'true' }
+      : path === '/api/block/getBlockKramdown' ? { kramdown: `* ((${saved} '文章标题'))` } : undefined;
+    expect(await refreshCategoryIndex(ai)).toBe(index);
+    expect(calls().some(([p]) => p === '/api/block/updateBlock' || p === '/api/attr/setBlockAttrs')).toBe(false);
   });
   it("ignores markers with only a similar attribute name", async () => {
     override = path => path === '/api/query/sql' ? [{ ...marker, ial: 'not-custom-zl-index="true"' }] : undefined;
