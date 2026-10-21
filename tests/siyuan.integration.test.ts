@@ -67,6 +67,7 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     expect((await locateDocument(updated.documentId)).hpath).toBe("/根/AI/新标题");
     const savedAttrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: result.documentId });
     expect(savedAttrs["custom-zl-article"]).toBe(articleIdentity(article));
+    expect(savedAttrs["custom-sy-readonly"]).not.toBe("true");
     expect((await kernelPost<{ kramdown: string }>("/api/block/getBlockKramdown", { id: result.documentId })).kramdown).toContain("更新正文");
   });
   it("rejects destinations outside the anchor", async () => {
@@ -81,6 +82,10 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     expect(md).toContain("收集人工智能、模型与机器学习文章。");
     expect(md).toContain("siyuan://blocks/");
     expect(md).toContain('custom-zl-index="true"');
+    expect((await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: category }))["custom-sy-readonly"]).toBe("true");
+    await attrs(category, { "custom-sy-readonly": "false" });
+    await refreshCategoryIndex(category);
+    expect((await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: category }))["custom-sy-readonly"]).toBe("false");
   });
   it("clears stale entries when the last child document is removed", async () => {
     const empty = await create("/根/空分类", "空分类介绍");

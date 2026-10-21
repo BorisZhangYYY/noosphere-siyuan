@@ -207,6 +207,17 @@ describe("managed category indexes", () => {
   it("creates a managed block after opt-in", async () => {
     expect(await refreshCategoryIndex(ai, { create: true })).toBe(index);
     expect(calls().find(([p]) => p === '/api/block/appendBlock')![1]).toMatchObject({ parentID: ai });
+    expect(calls().filter(([p]) => p === '/api/attr/setBlockAttrs').map(([, payload]) => payload)).toContainEqual({ id: ai, attrs: { 'custom-sy-readonly': 'true' } });
+  });
+  it("defaults an existing managed index page to read-only", async () => {
+    override = path => path === '/api/query/sql' ? [marker] : undefined;
+    await refreshCategoryIndex(ai);
+    expect(calls()).toContainEqual(['/api/attr/setBlockAttrs', { id: ai, attrs: { 'custom-sy-readonly': 'true' } }]);
+  });
+  it.each(['false', 'true'])("preserves an explicit document lock value of %s", async value => {
+    override = path => path === '/api/query/sql' ? [marker] : path === '/api/attr/getBlockAttrs' ? { type: 'doc', 'custom-sy-readonly': value } : undefined;
+    await refreshCategoryIndex(ai);
+    expect(calls().filter(([p, payload]) => p === '/api/attr/setBlockAttrs' && (payload as any).id === ai)).toHaveLength(0);
   });
   it("clears stale entries when the category becomes empty", async () => {
     override = path => path === '/api/query/sql' ? [marker] : path === '/api/filetree/listDocsByPath' ? { files: [] } : undefined;

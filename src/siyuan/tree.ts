@@ -4,6 +4,7 @@ import { locateDocument, parentDocumentId, rootCondition, SIYUAN_ID, sqlLiteral,
 
 export const CATEGORY_ATTR = "custom-zl-category";
 export const INDEX_ATTR = "custom-zl-index";
+export const READONLY_ATTR = "custom-sy-readonly";
 export interface CategoryNode { id: string; name: string; description: string; path: string; parentId: string }
 interface SqlRow { id: string; box: string; path: string; hpath: string; content: string; ial: string; type: string }
 
@@ -95,5 +96,8 @@ async function updateCategoryIndex(categoryDocId: string, create: boolean): Prom
     if (!id) throw new Error("思源未确认目录块创建结果");
   }
   await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [INDEX_ATTR]: "true" } });
+  // 使用思源原生文档锁；明确解锁后的 "false" 必须保留，后台目录更新不受锁定影响。
+  const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: categoryDocId });
+  if (!attrs[READONLY_ATTR]) await kernelPost("/api/attr/setBlockAttrs", { id: categoryDocId, attrs: { [READONLY_ATTR]: "true" } });
   return id;
 }
