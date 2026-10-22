@@ -68,6 +68,7 @@ it('opens the root document from the inline list without creating a management d
   const closeParent = vi.fn();
   await launch(closeParent);
   expect(dialogs).toHaveLength(0);
+  expect(field<HTMLButtonElement>('openRoot').hidden).toBe(false);
   click('openRoot');
   expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: root } }));
   expect(closeParent).toHaveBeenCalledOnce(); expect(document.querySelector('[data-role="categoryManager"]')).not.toBeNull();
@@ -87,7 +88,8 @@ it('opens the form only on request and supports keyboard selection of a parent c
 });
 it('does not offer a root document for a notebook root', async () => {
   vi.mocked(loadManagedCategories).mockResolvedValue({ rootDocumentId: null, rootLabel: '笔记本', categories: [] });
-  await launch(); expect(field<HTMLButtonElement>('openRoot').disabled).toBe(true);
+  await launch(); expect(field<HTMLButtonElement>('openRoot').hidden).toBe(true);
+  expect(field<HTMLButtonElement>('openRoot').disabled).toBe(true);
 });
 
 it('refreshes the inline list when the saved root changes and clears it when unset', async () => {

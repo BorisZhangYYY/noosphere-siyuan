@@ -1514,9 +1514,12 @@ export default class NoospherePlugin extends Plugin {
       })();
     });
     /** 分类配置独立保存，不提交模型设置页尚未保存的编辑。 */
+    let classificationSaveConfirmed = false;
     const refreshClassificationState = (): void => {
       const dirty = rootDocument.value.trim() !== this.settings.rootDocumentId || autoCreateIndex.checked !== this.settings.autoCreateIndex;
-      role("classificationState").textContent = dirty ? "未保存" : "已保存";
+      if (dirty) classificationSaveConfirmed = false;
+      role("classificationState").hidden = !dirty && !classificationSaveConfirmed;
+      role("classificationState").textContent = dirty ? "未保存" : classificationSaveConfirmed ? "已保存" : "";
     };
     rootDocument.addEventListener("input", refreshClassificationState);
     autoCreateIndex.addEventListener("change", refreshClassificationState);
@@ -1528,6 +1531,7 @@ export default class NoospherePlugin extends Plugin {
       const result = await this.saveOwnedData(STORAGE_NAME, storedSettings) as { code?: number; msg?: string };
       if (result?.code !== 0) throw new Error(result?.msg || "分类配置保存失败");
       this.settings = next;
+      classificationSaveConfirmed = true;
       if (setupBaseline) { setupBaseline.rootDocumentId = rootId; setupBaseline.autoCreateIndex = next.autoCreateIndex; }
       renderSaveMode(); refreshClassificationState(); refreshSettingsState(); updateActions();
       if (rootId) {

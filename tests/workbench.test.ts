@@ -1105,6 +1105,29 @@ describe("workbench regression", () => {
     expect(document.querySelector<HTMLElement>('[data-role="classificationPanel"]')!.hidden).toBe(false);
     click("showHistory"); expect(document.querySelector<HTMLElement>('[data-role="classificationPanel"]')!.hidden).toBe(true);
   });
+  it("starts classification status hidden, shows edits and confirms only a successful save", async () => {
+    await launch(); click("showClassification");
+    const state = document.querySelector<HTMLElement>('[data-role="classificationState"]')!;
+    expect(state.hidden).toBe(true); expect(state.textContent).toBe('');
+    input("rootDocumentId", "20260101000000-aaaaaaa");
+    expect(state.hidden).toBe(false); expect(state.textContent).toBe('未保存');
+    click("saveClassification"); await ready();
+    expect(state.hidden).toBe(false); expect(state.textContent).toBe('已保存');
+    const checkbox = document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!;
+    checkbox.click(); expect(state.textContent).toBe('未保存');
+    checkbox.click(); expect(state.hidden).toBe(true);
+    fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>('#entry')!.click();
+    expect(document.querySelector<HTMLElement>('[data-role="classificationState"]')!.hidden).toBe(true);
+  });
+  it("keeps classification changes unsaved if persistence fails", async () => {
+    const plugin = await launch(); click("showClassification");
+    input("rootDocumentId", "20260101000000-aaaaaaa");
+    vi.spyOn(plugin, 'saveData').mockRejectedValueOnce(new Error('存储失败'));
+    click("saveClassification"); await ready();
+    const state = document.querySelector<HTMLElement>('[data-role="classificationState"]')!;
+    expect(state.hidden).toBe(false); expect(state.textContent).toBe('未保存');
+    expect(fixtures.files.get('settings.json')).toMatchObject({ rootDocumentId: '' });
+  });
   it("shows category management below the location in the same view and preserves the article", async () => {
     await launch(); await scrape();
     const previous = stored().markdown, dialogCount = fixtures.dialogs.length;
