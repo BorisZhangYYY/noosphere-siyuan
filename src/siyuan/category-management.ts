@@ -1,7 +1,7 @@
 /** 分类管理仅修改选定根下的分类文档；描述、用户正文与目录分开维护。 */
 import { kernelPost } from "./api";
 import { locateDocument, SIYUAN_ID, sqlLiteral, withinRoot, type DocumentLocation } from "./location";
-import { attrFromIal, CATEGORY_ATTR, discoverCategories, INDEX_ATTR, OVERVIEW_ROOT_ATTR, refreshCategoryIndex, type CategoryNode } from "./tree";
+import { CATEGORY_ATTR, discoverCategories, INDEX_ATTR, OVERVIEW_ROOT_ATTR, refreshCategoryIndex, type CategoryNode } from "./tree";
 import { DESCRIPTION_ATTR, DESCRIPTION_HEADING_ATTR, descriptionSection, readCategoryDescription } from "./category-description";
 import { safeDocumentTitle } from "./destination";
 
@@ -9,7 +9,7 @@ interface ChildBlock { id: string; type: string; subType?: string; content?: str
 interface Operations { doOperations?: Array<{ id?: string; action?: string }> }
 export interface CategoryInput { name: string; description: string; parentId: string }
 const HELP_ATTR = "custom-zl-classification-help";
-const OVERVIEW_HELP = "知流根据分类名称、完整路径和“分类描述”选择已有分类；没有匹配时保存在分类根下。分类页和总览页默认锁定，文章保持可编辑。请在知流设置的“分类管理”中修改分类；也可在思源解锁后编辑“分类描述”。目录标题改名不影响分类，目录链接会自动维护。";
+const ROOT_HELP = "本页承担分类目录树，默认锁定；不推荐修改“目录”“说明”和各分类页的二级标题，以保持文档结构清晰。目录随分类新建、删除、改名和移动自动更新，点击目录项可打开文档。\n\n请从知流的“分类配置 → 分类管理”新增或编辑分类；分类描述应说明收录主题、典型内容和分类边界，可手动填写，也可先用 AI 生成再确认同步。你也可以在思源原生菜单中解锁分类文档，直接编辑分类描述所在位置，后续分类会读取最新描述；主动解锁后不会被再次强制锁定。文章文档始终可编辑。\n\n自动分类使用分类文档 ID、完整路径和描述区域的块标记，不依赖二级标题的文字。只改标题名称不会使分类失效；删除或重建描述标题可能丢失区域标记，可在分类管理中重新保存描述来修复。未找到明确匹配分类时，文章保存在分类根下。";
 const serial = new Map<string, Promise<unknown>>();
 
 /** 防止当前前端的重复点击创建多个目录或同时覆盖同一描述。 */
@@ -81,39 +81,53 @@ export async function writeCategoryDescription(id: string, next?: string): Promi
   await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { "custom-zl-desc": "" } });
 }
 
-/** 根文档直接展示分类；笔记本没有正文，在其下创建可复用的分类总览文档。 */
-export async function ensureClassificationOverview(rootId: string): Promise<string> {
-  return exclusive(`overview:${rootId}`, async () => {
+/** 根文档承载目录和说明；笔记本没有正文，不再生成独立总览文档。 */
+export async function ensureClassificationRoot(rootId: string): Promise<string | null> {
+  return exclusive(`root:${rootId}`, async () => {
     const root = await locateDocument(rootId);
-    let id = root.id;
-    if (root.isNotebook) {
-      await kernelPost("/api/sqlite/flushTransaction", {});
-      const rows = await kernelPost<Array<{ id: string; ial: string }>>("/api/query/sql", {
-        stmt: `SELECT id, ial FROM blocks WHERE type = 'd' AND box = ${sqlLiteral(root.notebook)} AND ial LIKE '%${OVERVIEW_ROOT_ATTR}%' ORDER BY created LIMIT 2147483647`,
-      });
-      const owned = rows.find(row => attrFromIal(row.ial, OVERVIEW_ROOT_ATTR) === root.id);
-      if (owned) id = owned.id;
-      else {
-        let suffix = 1, path = "/分类总览";
-        while ((await kernelPost<string[]>("/api/filetree/getIDsByHPath", { notebook: root.notebook, path })).length) path = `/分类总览（${++suffix}）`;
-        id = await kernelPost<string>("/api/filetree/createDocWithMd", { notebook: root.notebook, path,
-          markdown: `## 分类使用说明\n\n${OVERVIEW_HELP}\n{: ${HELP_ATTR}="${root.id}"}\n\n## 全部分类\n\n暂无分类。\n{: ${INDEX_ATTR}="true"}` });
-        if (!(await kramdown(id)).includes(`${HELP_ATTR}="${root.id}"`)) throw new Error("分类总览位置已被其他文档占用，请重试");
+    if (root.isNotebook) return null;
+    const id = root.id;
+    const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id });
+    let children = await kernelPost<ChildBlock[]>("/api/block/getChildBlocks", { id });
+    const section = async (key: string, title: string, legacy: string): Promise<string> => {
+      const bound = children.find(child => child.id === attrs[key] && child.type === "h");
+      if (bound) return bound.id;
+      // 仅迁移插件旧结构，之后始终根据块 ID 定位，不再依赖标题文字。
+      const old = attrs[OVERVIEW_ROOT_ATTR] === id ? children.find(child => child.type === "h" && child.content === legacy) : undefined;
+      const headingId = old?.id || insertedId(await kernelPost<Operations[]>("/api/block/appendBlock", { parentID: id, dataType: "markdown", data: `## ${title}` }));
+      if (old) await kernelPost("/api/block/updateBlock", { id: headingId, dataType: "markdown", data: `## ${title}` });
+      await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [key]: headingId } });
+      return headingId;
+    };
+    const directory = await section("custom-zl-root-directory-heading", "目录", "全部分类");
+    const helpHeading = await section("custom-zl-root-help-heading", "说明", "分类使用说明");
+    let help = children.find(child => child.id === attrs["custom-zl-root-help-block"]);
+    if (!help) {
+      for (const child of children.filter(child => child.type === "p")) {
+        const childAttrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: child.id });
+        if (childAttrs[HELP_ATTR] === id) { help = child; break; }
       }
     }
-    const markdown = await kramdown(id);
-    const addedHelp = !markdown.includes(`${HELP_ATTR}="${root.id}"`);
-    if (addedHelp) {
-      await kernelPost("/api/block/appendBlock", { parentID: id, dataType: "markdown",
-        data: `## 分类使用说明\n\n${OVERVIEW_HELP}\n{: ${HELP_ATTR}="${root.id}"}\n\n## 全部分类` });
+    const helpData = `${ROOT_HELP}\n{: ${HELP_ATTR}="${id}"}`;
+    if (!help) {
+      // 一个受管段落承载说明，避免多段说明在后续同步时重复追加。
+      const result = await kernelPost<Operations[]>("/api/block/insertBlock", { previousID: helpHeading, dataType: "markdown", data: helpData.replace(/\n\n/g, "\n") });
+      help = { id: insertedId(result), type: "p" };
+    } else {
+      const previous = await kramdown(help.id);
+      if (!previous.includes(ROOT_HELP.replace(/\n\n/g, "\n"))) await kernelPost("/api/block/updateBlock", { id: help.id, dataType: "markdown", data: helpData.replace(/\n\n/g, "\n") });
     }
-    await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [OVERVIEW_ROOT_ATTR]: root.id } });
+    await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [OVERVIEW_ROOT_ATTR]: id, "custom-zl-root-help-block": help.id } });
     const indexId = await refreshCategoryIndex(id, { create: true });
-    if (addedHelp && indexId) {
-      const children = await kernelPost<ChildBlock[]>("/api/block/getChildBlocks", { id });
-      const heading = children.find(child => child.type === "h" && child.content === "全部分类");
-      if (heading && children.findIndex(child => child.id === indexId) < children.indexOf(heading)) {
-        await kernelPost("/api/block/moveBlock", { id: indexId, previousID: heading.id, parentID: id });
+    children = await kernelPost<ChildBlock[]>("/api/block/getChildBlocks", { id });
+    // 按块 ID 排列目录 → 说明；保留根文档中用户已有的其他内容。
+    for (const [blockId, previousID] of [[indexId, directory], [helpHeading, indexId], [help.id, helpHeading]]) {
+      if (!blockId || !previousID) continue;
+      if (children.findIndex(child => child.id === blockId) !== children.findIndex(child => child.id === previousID) + 1) {
+        await kernelPost("/api/block/moveBlock", { id: blockId, previousID, parentID: id });
+        const block = children.find(child => child.id === blockId);
+        children = children.filter(child => child.id !== blockId);
+        if (block) children.splice(children.findIndex(child => child.id === previousID) + 1, 0, block);
       }
     }
     return id;
@@ -121,13 +135,13 @@ export async function ensureClassificationOverview(rootId: string): Promise<stri
 }
 
 /** 只在用户打开分类管理时规范旧介绍，不在分类读取期间改写文档。 */
-export async function loadManagedCategories(rootId: string): Promise<{ overviewId: string; categories: CategoryNode[]; rootLabel: string }> {
-  const overviewId = await ensureClassificationOverview(rootId);
+export async function loadManagedCategories(rootId: string): Promise<{ rootDocumentId: string | null; categories: CategoryNode[]; rootLabel: string }> {
+  const rootDocumentId = await ensureClassificationRoot(rootId);
   const categories = await discoverCategories(rootId);
   for (const category of categories) await exclusive(`description:${category.id}`, () => writeCategoryDescription(category.id));
   const root = await locateDocument(rootId);
   const notebooks = root.isNotebook ? await kernelPost<{ notebooks: Array<{ id: string; name: string }> }>("/api/notebook/lsNotebooks", {}) : undefined;
-  return { overviewId, categories: await discoverCategories(rootId), rootLabel: root.hpath || notebooks?.notebooks.find(item => item.id === root.id)?.name || root.id };
+  return { rootDocumentId, categories: await discoverCategories(rootId), rootLabel: root.hpath || notebooks?.notebooks.find(item => item.id === root.id)?.name || root.id };
 }
 
 async function categoryLocation(root: DocumentLocation, id: string): Promise<DocumentLocation> {
@@ -153,7 +167,7 @@ export async function createCategory(rootId: string, input: CategoryInput, onCre
     await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [CATEGORY_ATTR]: "true" } });
     await writeCategoryDescription(id);
     await refreshCategoryIndex(id, { create: true });
-    await ensureClassificationOverview(root.id);
+    await ensureClassificationRoot(root.id);
     return id;
   });
 }
@@ -172,6 +186,6 @@ export async function updateCategory(rootId: string, id: string, input: Category
     if (location.hpath.split("/").at(-1) !== value.name) await kernelPost("/api/filetree/renameDocByID", { id, title: value.name });
     await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [CATEGORY_ATTR]: "true" } });
     await refreshCategoryIndex(id, { create: true });
-    await ensureClassificationOverview(root.id);
+    await ensureClassificationRoot(root.id);
   });
 }

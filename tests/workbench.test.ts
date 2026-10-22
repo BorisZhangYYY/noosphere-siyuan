@@ -35,7 +35,7 @@ vi.mock("../src/siyuan/tree", () => ({ discoverCategories: vi.fn(), refreshCateg
 vi.mock("../src/siyuan/destination", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/destination")>(), findArticleDocument: vi.fn(), ensureArticleDocument: vi.fn() }));
 vi.mock("../src/siyuan/location", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/location")>(), locateDocument: vi.fn() }));
 vi.mock("../src/siyuan/index-maintenance", () => ({ CategoryIndexMaintenance: class { onMessage = vi.fn(); schedule = vi.fn(); stop = vi.fn(); } }));
-vi.mock("../src/siyuan/category-management", () => ({ ensureClassificationOverview: vi.fn().mockResolvedValue("20260101000000-ooooooo") }));
+vi.mock("../src/siyuan/category-management", () => ({ ensureClassificationRoot: vi.fn().mockResolvedValue("20260101000000-ooooooo") }));
 vi.mock("../src/category-manager", () => ({ openCategoryManager: vi.fn().mockReturnValue(() => undefined) }));
 vi.mock("../src/review/classify", () => ({ classifyArticle: vi.fn() }));
 // 原生键盘行为在思源现场验收；这里验证工作台与原生编辑器之间的数据和生命周期。
@@ -111,7 +111,7 @@ describe("workbench regression", () => {
     expect(assets.querySelector("summary")!.textContent).toContain("待审阅");
     expect(assets.closest(".noosphere__inspection-scroll")).toBe(document.querySelector('[aria-label="保存位置"]')!.closest(".noosphere__inspection-scroll"));
     expect(document.querySelector('[data-role="classifyDetails"]')).toBeNull();
-    expect(document.querySelector('[data-field="autoCreateIndex"]')!.closest('[data-view="setup"]')).not.toBeNull();
+    expect(document.querySelector('[data-field="autoCreateIndex"]')!.closest('[data-role="classificationPanel"]')).not.toBeNull();
   });
 
   beforeEach(() => {
@@ -1017,9 +1017,9 @@ describe("workbench regression", () => {
   });
   /** 自动模式覆盖实际工作台事件，而非只验证底层函数。 */
   async function chooseAuto(): Promise<void> {
-    click("toggleSettings");
+    click("showClassification");
     input("rootDocumentId", "20260101000000-aaaaaaa");
-    click("settings"); await ready(); click("toggleSettings");
+    click("saveClassification"); await ready(); click("showCapture");
     document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="auto"]')!.click();
   }
   function completedReview() {
@@ -1044,17 +1044,17 @@ describe("workbench regression", () => {
   });
   it("manages root and index settings globally and exposes no root editor in the article", async () => {
     await launch(); await scrape(); await chooseAuto();
-    click("toggleSettings");
+    click("showClassification");
     document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.click();
-    click("settings"); await ready(); click("toggleSettings");
-    expect(document.querySelector('[data-view="workbench"] [data-field="rootDocumentId"]')).toBeNull();
+    click("saveClassification"); await ready(); click("showCapture");
+    expect(document.querySelector('[data-view="setup"] [data-field="rootDocumentId"]')).toBeNull();
     expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("20260101000000-aaaaaaa");
     fixtures.dialogs.at(-1)!.destroy();
     await vi.waitFor(() => expect(stored()).not.toHaveProperty("rootDocumentId"));
     expect(stored()).not.toHaveProperty("autoCreateIndex");
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", autoCreateIndex: true });
     document.querySelector<HTMLButtonElement>("#entry")!.click();
-    expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.closest('[aria-label="分类设置"]')).not.toBeNull();
+    expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.closest('[aria-label="分类配置"]')).not.toBeNull();
     expect(document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.checked).toBe(true);
   });
   function legacyDraft(): CaptureDraft {
@@ -1079,7 +1079,7 @@ describe("workbench regression", () => {
     fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
     const plugin = await launch();
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-ccccccc", classificationSettingsVersion: 1 });
-    click("toggleSettings"); input("rootDocumentId", ""); click("settings"); await ready();
+    click("showClassification"); input("rootDocumentId", ""); click("saveClassification"); await ready();
     plugin.onunload(); fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
     await launch();
     expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.value).toBe("");
@@ -1092,10 +1092,21 @@ describe("workbench regression", () => {
     await launch();
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", classificationSettingsVersion: 1 });
   });
+  it("keeps classification configuration independent from unsaved model settings and displays the live system prompt", async () => {
+    await launch(); await scrape();
+    input("modelName", "unsaved-model");
+    click("showClassification"); input("rootDocumentId", "20260101000000-aaaaaaa");
+    expect(document.querySelector('[data-role="classificationPanel"]')!.textContent).toContain('你只能从给定的分类列表里选择一个 ID');
+    expect(document.querySelector('[data-view="setup"] [data-field="rootDocumentId"]')).toBeNull();
+    click("saveClassification"); await ready();
+    expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", modelName: "test" });
+    expect(document.querySelector<HTMLElement>('[data-role="classificationPanel"]')!.hidden).toBe(false);
+    click("showHistory"); expect(document.querySelector<HTMLElement>('[data-role="classificationPanel"]')!.hidden).toBe(true);
+  });
   it("opens category management with the saved root and preserves the article", async () => {
     await launch(); await scrape();
     const previous = stored().markdown;
-    click("toggleSettings"); input("rootDocumentId", "20260101000000-aaaaaaa"); click("manageCategories"); await ready();
+    click("showClassification"); input("rootDocumentId", "20260101000000-aaaaaaa"); click("manageCategories"); await ready();
     expect(openCategoryManager).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ rootDocumentId: "20260101000000-aaaaaaa" }), expect.any(Function), expect.any(Function));
     expect(stored().markdown).toBe(previous);
   });

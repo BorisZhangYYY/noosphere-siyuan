@@ -30,11 +30,13 @@ Capture new articles at the top, read and edit the body on the left, and review 
 3. Paste a URL at the top and capture it. Inspect the article on the left; click Edit to make changes, then Confirm to keep them.
 4. Optionally choose a review perspective and output language on the right, then start AI review. Click an image thumbnail to inspect it and select its checkbox to remove it.
 5. In manual mode, copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
-6. For AI classification, enter a **notebook or root-document ID** as the anchor. Once both text and image review finish successfully, the article is classified and saved automatically. Cancellation or review failure does not save it; a failed save keeps the completed review for retry.
+6. Open **Classification configuration** at the far right of the workbench tabs (marked AI), then enter a **notebook or root-document ID** as the anchor and save. Select automatic classification in the article save area. Once both text and image review finish successfully, the article is classified and saved automatically. Cancellation or review failure does not save it; a failed save keeps the completed review for retry.
 
 ### Prepare categories
 
-- Create category documents below the anchor and give each a nonempty `custom-zl-category` attribute. The first body paragraph supplies the description; `custom-zl-desc` can override it. Only categories within the selected subtree participate, with their full paths.
+- Open Category management to see the category list. Add category and Edit open a form; choose a parent using the dropdown and write a description, or generate a draft with AI. Confirm synchronization to write the category and description to SiYuan.
+- A selected root document contains the managed directory followed by usage instructions. A notebook has no body, so no separate overview document is created. Category pages are locked by default; use Category management or unlock them in SiYuan to edit the description. Renaming a marked heading preserves its identity.
+- Classification configuration displays the exact system prompt. The model receives category IDs, full paths, descriptions, the article title and its first 4,000 characters. It can select only an existing ID; confidence below 0.6 falls back to the root.
 - Enable automatic directory creation to append a managed index below each category introduction on its first article save. Alternatively, mark an existing list block with a nonempty `custom-zl-index` attribute. Saving or opening the document refreshes its marked index; a failed refresh can be retried separately.
 - Unmatched articles and classification-service failures save into a separate article document at the anchor root, with an explanation. Repeated saves of the same source update the existing article, even after a title change. Different sources with identical titles get separate document names; unrelated notes are preserved.
 

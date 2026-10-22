@@ -6,7 +6,7 @@ import { discoverCategories, refreshCategoryIndex } from "../src/siyuan/tree";
 import { articleIdentity, ensureArticleDocument } from "../src/siyuan/destination";
 import { locateDocument, type DocumentLocation } from "../src/siyuan/location";
 import { CategoryIndexMaintenance } from "../src/siyuan/index-maintenance";
-import { createCategory, ensureClassificationOverview, loadManagedCategories, updateCategory } from "../src/siyuan/category-management";
+import { createCategory, ensureClassificationRoot, loadManagedCategories, updateCategory } from "../src/siyuan/category-management";
 import { categoryDescription } from "../src/siyuan/tree";
 
 const base = process.env.SIYUAN_TEST_URL;
@@ -126,14 +126,16 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     const md = (await kernelPost<{ kramdown: string }>("/api/block/getBlockKramdown", { id: empty })).kramdown;
     expect(md).toContain("暂无子文档。"); expect(md).not.toContain(child);
   });
-  it("creates nested categories, structured descriptions and a category-only root overview", async () => {
+  it("creates nested categories, structured descriptions and a root directory and help", async () => {
     const rootId = await create('/分类管理根', '根文档中的用户说明必须保留。');
     const ai = await createCategory(rootId, { name: '人工智能', description: '收集智能体、工具调用和机器学习应用。', parentId: rootId });
     const llm = await createCategory(rootId, { name: '大模型', description: '收集模型训练、推理、提示词与 RAG。', parentId: ai });
     const sample = await create('/分类管理根/人工智能/大模型/样文', '文章可编辑');
-    expect(await ensureClassificationOverview(rootId)).toBe(rootId);
+    expect(await ensureClassificationRoot(rootId)).toBe(rootId);
     const rootMd = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: rootId })).kramdown;
     expect(rootMd).toContain('根文档中的用户说明必须保留'); expect(rootMd).toContain(ai); expect(rootMd).toContain(llm); expect(rootMd).not.toContain(sample);
+    expect(rootMd.indexOf('## 目录')).toBeLessThan(rootMd.indexOf('## 说明'));
+    expect(rootMd).not.toContain('## 分类使用说明');
     const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: ai })).kramdown;
     expect(md).toContain('## 分类描述'); expect(md).toContain('custom-zl-description="true"'); expect(md).toContain('## 文章目录');
     expect((await discoverCategories(rootId)).map(node => node.path)).toEqual(['人工智能', '人工智能 / 大模型']);
@@ -172,18 +174,28 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     expect((await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: unrelated })).kramdown).toContain('不要覆盖');
     await expect(createCategory(rootId, { name: '范围外', description: '规则', parentId: outside })).rejects.toThrow('移出');
   }, 20000);
-  it("creates one notebook overview without taking over an existing document with that name", async () => {
+  it("does not create an overview when the selected root is a notebook", async () => {
     const existing = await create('/分类总览', '用户已有同名文档');
-    const overview = await ensureClassificationOverview(notebook);
-    expect(overview).not.toBe(existing); expect(await ensureClassificationOverview(notebook)).toBe(overview);
-    expect((await locateDocument(overview)).hpath).toBe('/分类总览（2）');
-    const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: overview })).kramdown;
-    expect(md).toContain('分类使用说明'); expect(md).toContain(category); expect(md).not.toContain(`((${overview}`);
+    expect(await ensureClassificationRoot(notebook)).toBeNull();
+    const ids = await kernelPost<string[]>('/api/filetree/getIDsByHPath', { notebook, path: '/分类总览（2）' });
+    expect(ids).toEqual([]);
     expect((await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: existing })).kramdown).toContain('用户已有同名文档');
-  }, 20000);
+  });
+  it("migrates owned root sections and preserves their bindings after a rename", async () => {
+    const id = await create('/旧版根结构', '保留用户正文。\n\n## 分类使用说明\n\n旧说明\n{: custom-zl-classification-help="PLACEHOLDER"}\n\n## 全部分类\n\n暂无分类。\n{: custom-zl-index="true"}');
+    await attrs(id, { 'custom-zl-overview-root': id });
+    await ensureClassificationRoot(id);
+    const blocks = await kernelPost<Array<{ id: string; type: string; content?: string }>>('/api/block/getChildBlocks', { id });
+    const heading = blocks.find(block => block.type === 'h' && block.content === '目录')!;
+    await kernelPost('/api/block/updateBlock', { id: heading.id, dataType: 'markdown', data: '## 自定义导航' });
+    await ensureClassificationRoot(id);
+    const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id })).kramdown;
+    expect(md).toContain('保留用户正文'); expect(md).toContain('## 自定义导航');
+    expect(md.match(/## 说明/g)).toHaveLength(1); expect(md).not.toContain('## 全部分类');
+  });
   it("updates the category overview when a category marker is added or removed", async () => {
     const rootId = await create('/标记变更根', '根说明');
-    await ensureClassificationOverview(rootId);
+    await ensureClassificationRoot(rootId);
     const sync = new CategoryIndexMaintenance(() => ({ rootDocumentId: rootId, autoCreateIndex: false }), error => errors.push(error));
     const errors: unknown[] = [], events: string[] = [];
     const url = new URL(base!); url.protocol = 'ws:'; url.pathname = '/ws'; url.search = `?app=noosphere-test&id=attrs-${Date.now()}&type=main`;

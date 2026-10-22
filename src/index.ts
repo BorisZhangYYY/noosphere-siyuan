@@ -12,7 +12,7 @@ import { locateDocument, parentDocumentId } from "./siyuan/location";
 import { refreshCategoryIndex } from "./siyuan/tree";
 import { CategoryIndexMaintenance } from "./siyuan/index-maintenance";
 import { CategoryIndexReadonly } from "./siyuan/index-readonly";
-import { ensureClassificationOverview } from "./siyuan/category-management";
+import { ensureClassificationRoot } from "./siyuan/category-management";
 import { openCategoryManager } from "./category-manager";
 import type { ClassificationResult } from "./review/classify";
 import { prepareClassification, validateClassification, type ClassificationPlan } from "./review/classification-plan";
@@ -127,7 +127,7 @@ export default class NoospherePlugin extends Plugin {
         const { outputLanguage: _outputLanguage, ...config } = this.settings;
         const result = await this.saveOwnedData(STORAGE_NAME, config) as { code?: number; msg?: string };
         if (result?.code !== 0) throw new Error(result?.msg || "配置迁移失败");
-      } catch (error) { showMessage(`分类设置迁移尚未保存，请在设置页保存：${String(error)}`, 7000, "error"); }
+      } catch (error) { showMessage(`分类设置迁移尚未保存，请在分类配置中保存：${String(error)}`, 7000, "error"); }
     }
     const historyId = this.historyStore.migrate(currentDraft);
     if (currentDraft && historyId) {
@@ -590,7 +590,7 @@ export default class NoospherePlugin extends Plugin {
         || (autoMode ? !this.settings.rootDocumentId.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("retryIndex").disabled = busy || !indexDocumentId;
       action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
-      for (const name of ["settings", "toggleSettings", "manageCategories", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
+      for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "manageCategories", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       role("providerList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
@@ -612,6 +612,9 @@ export default class NoospherePlugin extends Plugin {
       const previous = historyVisible;
       historyVisible = visible;
       if (visible || previous) { inputUrl.value = ""; persistDraft(); updateActions(); }
+      role("classificationPanel").hidden = true;
+      action("showClassification").classList.remove("is-active");
+      action("showClassification").setAttribute("aria-pressed", "false");
       root.querySelector<HTMLElement>(".noosphere__capture")!.hidden = visible;
       root.querySelector<HTMLElement>(".noosphere__work-content")!.hidden = visible;
       role("historyPanel").hidden = !visible;
@@ -713,6 +716,18 @@ export default class NoospherePlugin extends Plugin {
     };
     action("showCapture").addEventListener("click", () => showHistory(false));
     action("showHistory").addEventListener("click", () => showHistory(true));
+    action("showClassification").addEventListener("click", () => {
+      finishArticleEditing(); persistDraft();
+      root.querySelector<HTMLElement>(".noosphere__capture")!.hidden = true;
+      root.querySelector<HTMLElement>(".noosphere__work-content")!.hidden = true;
+      role("historyPanel").hidden = true;
+      role("classificationPanel").hidden = false;
+      for (const name of ["showCapture", "showHistory", "showClassification"]) {
+        const selected = name === "showClassification";
+        action(name).classList.toggle("is-active", selected);
+        action(name).setAttribute("aria-pressed", String(selected));
+      }
+    });
     role("historySearch").addEventListener("input", renderHistory);
     action("followStream").addEventListener("click", () => {
       if (textFollowComplete) return;
@@ -847,10 +862,10 @@ export default class NoospherePlugin extends Plugin {
         imageReview: !!imageProvider.value,
         customPerspectives: customPerspectives.map(item => ({ ...item, sections: undefined })),
         targetDocumentId: "",
-        rootDocumentId: field("rootDocumentId").value.trim(),
+        rootDocumentId: this.settings.rootDocumentId,
         classificationSettingsVersion: 1,
         saveMode: saveMode(),
-        autoCreateIndex: autoCreateIndex.checked,
+        autoCreateIndex: this.settings.autoCreateIndex,
       };
     };
     const cloneSettings = (value: Settings): Settings => JSON.parse(JSON.stringify(value)) as Settings;
@@ -1271,8 +1286,6 @@ export default class NoospherePlugin extends Plugin {
       renderPerspectiveOptions();
       setDropdown("reviewPerspective", saved.reviewPerspective, false);
       setDropdown("workPerspective", saved.reviewPerspective, false);
-      rootDocument.value = saved.rootDocumentId;
-      autoCreateIndex.checked = saved.autoCreateIndex;
       refreshPerspectiveEditor();
       renderProviderView();
       secretVisibility.clear();
@@ -1488,11 +1501,7 @@ export default class NoospherePlugin extends Plugin {
         savingSettings = true;
         refreshSettingsState();
         try {
-          const settings = await saveSettings();
-          if (settings.rootDocumentId) {
-            try { await ensureClassificationOverview(settings.rootDocumentId); }
-            catch (error) { showMessage(`设置已保存，分类总览尚未同步；可在分类管理中重试：${String(error)}`, 7000, "error"); }
-          }
+          await saveSettings();
         } catch (error) {
           showMessage(`保存配置失败：${error instanceof Error ? error.message : String(error)}`, 7000, "error");
         } finally {
@@ -1501,12 +1510,38 @@ export default class NoospherePlugin extends Plugin {
         }
       })();
     });
+    /** 分类配置独立保存，不提交模型设置页尚未保存的编辑。 */
+    const refreshClassificationState = (): void => {
+      const dirty = rootDocument.value.trim() !== this.settings.rootDocumentId || autoCreateIndex.checked !== this.settings.autoCreateIndex;
+      role("classificationState").textContent = dirty ? "未保存" : "已保存";
+    };
+    rootDocument.addEventListener("input", refreshClassificationState);
+    autoCreateIndex.addEventListener("change", refreshClassificationState);
+    const saveClassification = async (): Promise<Settings> => {
+      const rootId = rootDocument.value.trim();
+      if (rootId) await locateDocument(rootId);
+      const next = { ...this.settings, rootDocumentId: rootId, autoCreateIndex: autoCreateIndex.checked };
+      const { outputLanguage: _language, ...storedSettings } = next;
+      const result = await this.saveOwnedData(STORAGE_NAME, storedSettings) as { code?: number; msg?: string };
+      if (result?.code !== 0) throw new Error(result?.msg || "分类配置保存失败");
+      this.settings = next;
+      if (setupBaseline) { setupBaseline.rootDocumentId = rootId; setupBaseline.autoCreateIndex = next.autoCreateIndex; }
+      renderSaveMode(); refreshClassificationState(); refreshSettingsState(); updateActions();
+      if (rootId) {
+        try { await ensureClassificationRoot(rootId); }
+        catch (error) { showMessage(`配置已保存，根文档目录尚未同步；可再次保存重试：${String(error)}`, 7000, "error"); }
+      }
+      return next;
+    };
+    refreshClassificationState();
+    action("saveClassification").addEventListener("click", () => {
+      void run("保存分类配置", async () => { await saveClassification(); return "分类配置已保存"; });
+    });
     action("manageCategories").addEventListener("click", () => {
       if (busy || savingSettings) return;
       void run("打开分类管理", async () => {
-        const settings = await saveSettings();
+        const settings = await saveClassification();
         if (!settings.rootDocumentId) throw new Error("请先填写分类根目录");
-        await locateDocument(settings.rootDocumentId);
         this.closeCategoryManager?.();
         this.closeCategoryManager = openCategoryManager(this.app, settings, () => { this.closeCategoryManager = null; }, () => this.captureDialog?.destroy());
         return "";
@@ -1571,7 +1606,7 @@ export default class NoospherePlugin extends Plugin {
         if (!settings.modelKey || !settings.modelName) { showView("setup"); throw new Error("请先配置模型 API Key 和模型名称"); }
         // 自动模式先检查锚点，配置错误时不消耗模型请求。
         if (saveMode() === "auto") {
-          if (!settings.rootDocumentId) throw new Error("请先在设置 → 分类设置中配置分类根目录");
+          if (!settings.rootDocumentId) throw new Error("请先在分类配置中配置分类根目录");
           await locateDocument(settings.rootDocumentId, signal);
         }
         throwIfCancelled(signal);
@@ -1681,7 +1716,7 @@ export default class NoospherePlugin extends Plugin {
       const manualDocumentId = target.value.trim();
       const settings = await saveSettings();
       const rootDocumentId = settings.rootDocumentId;
-      if (autoMode && !rootDocumentId) throw new Error("请先在设置 → 分类设置中配置分类根目录");
+      if (autoMode && !rootDocumentId) throw new Error("请先在分类配置中配置分类根目录");
       if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
       let anchor = autoMode ? await locateDocument(rootDocumentId) : undefined;
       let classificationPlan: ClassificationPlan | undefined;
@@ -1749,7 +1784,7 @@ export default class NoospherePlugin extends Plugin {
         persistDraft(); renderSavedLocation(); renderSaveMode();
         if (indexDocumentId) {
           try {
-            await refreshCategoryIndex(indexDocumentId, { create: autoCreateIndex.checked });
+            await refreshCategoryIndex(indexDocumentId, { create: this.settings.autoCreateIndex });
             indexDocumentId = undefined;
           } catch (error) {
             note += "，目录更新失败，可点击“重试目录”";
@@ -1757,8 +1792,8 @@ export default class NoospherePlugin extends Plugin {
           }
         }
         persistDraft(); renderSaveMode();
-        try { await ensureClassificationOverview(anchor.id); }
-        catch (error) { note += "，分类总览待同步"; showMessage(`文章已保存，分类总览更新失败，可在分类管理中重试：${String(error)}`, 7000, "error"); }
+        try { await ensureClassificationRoot(anchor.id); }
+        catch (error) { note += "，根文档目录待同步"; showMessage(`文章已保存，根文档目录更新失败，可在分类管理中重试：${String(error)}`, 7000, "error"); }
         return `已按「${where}」${written.created ? "新建并保存" : "更新保存"}${note}。${decision.categoryId ? "" : decision.reason + "。"}点击“打开文档”查看。`;
       }
       await appendArticle(manualDocumentId, article, content, editorState?.blockDOM);
@@ -1770,7 +1805,7 @@ export default class NoospherePlugin extends Plugin {
     action("retryIndex").addEventListener("click", () => {
       void run("更新目录", async () => {
         if (!indexDocumentId) return "";
-        await refreshCategoryIndex(indexDocumentId, { create: autoCreateIndex.checked });
+        await refreshCategoryIndex(indexDocumentId, { create: this.settings.autoCreateIndex });
         indexDocumentId = undefined; persistDraft(); renderSaveMode();
         return "目录已更新。";
       });
