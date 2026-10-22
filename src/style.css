@@ -286,6 +286,10 @@
 .noosphere__ai-badge { display:inline-flex; align-items:center; justify-content:center; padding:1px 5px; border-radius:4px; background:var(--ns-soft); color:var(--ns-accent); font-size:11px; font-weight:650; }
 .noosphere__classification { flex:1; min-height:0; overflow:auto; padding:0 3px 16px; }
 .noosphere__classification .noosphere__panel + .noosphere__panel { margin-top:16px; }
+.noosphere__classification-root { display:flex; align-items:flex-end; gap:12px; }
+.noosphere__classification-root > label { flex:1; min-width:0; }
+.noosphere__classification-root input { min-height:38px; }
+@media (max-width:480px) { .noosphere__classification-root { flex-direction:column; align-items:stretch; } }
 .noosphere__save-mode label { font-family:inherit; font-size:13px; font-weight:400; }
 /* 仅新增和编辑使用居中弹层，父分类菜单保持独立滚动。 */
 .noosphere__category-toolbar { margin-bottom:20px; }

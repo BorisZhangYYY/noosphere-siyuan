@@ -8,7 +8,7 @@ import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspe
 import { configuredProfiles, isCustomProvider, moveProvider, orderedProviderIds, presetProfile, providerInfo, providerMark, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
 import { articleIdentity, ensureArticleDocument, findArticleDocument } from "./siyuan/destination";
-import { locateDocument, parentDocumentId } from "./siyuan/location";
+import { classificationRootDocumentId, locateDocument, parentDocumentId } from "./siyuan/location";
 import { refreshCategoryIndex } from "./siyuan/tree";
 import { CategoryIndexMaintenance } from "./siyuan/index-maintenance";
 import { CategoryIndexReadonly } from "./siyuan/index-readonly";
@@ -262,6 +262,7 @@ export default class NoospherePlugin extends Plugin {
     let streamFollower: StreamFollowScroll | undefined;
     let streamPreviewTimer: ReturnType<typeof setTimeout> | undefined;
     let dialogClosed = false;
+    let openingClassificationRoot = false;
     let streamTitle = article?.title || "";
     let imageStage = "";
     let historyVisible = false;
@@ -592,6 +593,7 @@ export default class NoospherePlugin extends Plugin {
       action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
       for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
+      action("openClassificationRoot").disabled = busy || savingSettings || openingClassificationRoot || !rootDocument.value.trim();
       categoryManager?.setDisabled(busy || savingSettings);
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       role("providerList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
@@ -1521,8 +1523,28 @@ export default class NoospherePlugin extends Plugin {
       role("classificationState").hidden = !dirty && !classificationSaveConfirmed;
       role("classificationState").textContent = dirty ? "未保存" : classificationSaveConfirmed ? "已保存" : "";
     };
-    rootDocument.addEventListener("input", refreshClassificationState);
+    rootDocument.addEventListener("input", () => { refreshClassificationState(); updateActions(); });
     autoCreateIndex.addEventListener("change", refreshClassificationState);
+    // 固定入口直接打开输入框对应的根文档，分类列表失败或仍在加载时也可使用。
+    action("openClassificationRoot").addEventListener("click", () => {
+      if (busy || savingSettings || openingClassificationRoot || !rootDocument.value.trim()) return;
+      const requested = rootDocument.value.trim();
+      openingClassificationRoot = true; updateActions();
+      void (async () => {
+        try {
+          const id = await classificationRootDocumentId(await locateDocument(requested));
+          if (dialogClosed || requested !== rootDocument.value.trim()) return;
+          if (!id) throw new Error("当前思源未启用“顶层笔记本文档”，该笔记本暂时没有可打开的根文档");
+          openTab({ app: this.app, doc: { id } });
+          dialog.destroy();
+        } catch (error) {
+          if (!dialogClosed) showMessage(`无法打开根文档：${error instanceof Error ? error.message : String(error)}`, 7000, "error");
+        } finally {
+          openingClassificationRoot = false;
+          if (!dialogClosed) updateActions();
+        }
+      })();
+    });
     const saveClassification = async (): Promise<Settings> => {
       const rootId = rootDocument.value.trim();
       if (rootId) await locateDocument(rootId);

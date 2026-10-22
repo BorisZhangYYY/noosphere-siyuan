@@ -21,6 +21,17 @@ export async function locateDocument(documentId: string, signal?: AbortSignal): 
   return { id, ...location, hpath, isNotebook: false };
 }
 
+/** 打开入口只检查根文档能力，不依赖分类读取，也不写入或规范文档内容。 */
+export async function classificationRootDocumentId(root: DocumentLocation): Promise<string | null> {
+  if (!root.isNotebook) return root.id;
+  // 关闭功能后旧 .sy 文件可能仍存在，不能将隐藏文档当成可用入口。
+  const config = await kernelPost<{ conf?: { fileTree?: { boxDocEnabled?: boolean } } }>("/api/system/getConf", {});
+  if (!config.conf?.fileTree?.boxDocEnabled) return null;
+  const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: root.id });
+  if (attrs.type !== "doc") throw new Error("笔记本根文档尚未就绪，请在思源中打开笔记本后重试");
+  return root.id;
+}
+
 /** 文档 ID 路径用于归属判断，避免同名目录、相似前缀和其他笔记本混入。 */
 export function withinRoot(location: Pick<DocumentLocation, "notebook" | "path">, root: DocumentLocation, includeRoot = false): boolean {
   return location.notebook === root.notebook && (root.isNotebook

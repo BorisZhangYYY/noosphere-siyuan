@@ -33,7 +33,7 @@ vi.mock("../src/images/localize", async importOriginal => ({ ...await importOrig
 vi.mock("../src/siyuan/writer", () => ({ validateTargetDocument: vi.fn(), appendArticle: vi.fn() }));
 vi.mock("../src/siyuan/tree", () => ({ discoverCategories: vi.fn(), refreshCategoryIndex: vi.fn() }));
 vi.mock("../src/siyuan/destination", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/destination")>(), findArticleDocument: vi.fn(), ensureArticleDocument: vi.fn() }));
-vi.mock("../src/siyuan/location", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/location")>(), locateDocument: vi.fn() }));
+vi.mock("../src/siyuan/location", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/location")>(), locateDocument: vi.fn(), classificationRootDocumentId: vi.fn() }));
 vi.mock("../src/siyuan/index-maintenance", () => ({ CategoryIndexMaintenance: class { onMessage = vi.fn(); schedule = vi.fn(); stop = vi.fn(); } }));
 vi.mock("../src/siyuan/category-management", () => ({ ensureClassificationRoot: vi.fn().mockResolvedValue("20260101000000-ooooooo") }));
 vi.mock("../src/category-manager", () => ({ mountCategoryManager: vi.fn().mockImplementation(() => ({ refresh: vi.fn().mockResolvedValue(undefined), dispose: vi.fn(), setDisabled: vi.fn() })) }));
@@ -72,7 +72,7 @@ vi.mock("../src/article/editor", async importOriginal => ({
 import NoospherePlugin from "../src/index";
 import { discoverCategories, refreshCategoryIndex } from "../src/siyuan/tree";
 import { articleIdentity, ensureArticleDocument, findArticleDocument } from "../src/siyuan/destination";
-import { locateDocument } from "../src/siyuan/location";
+import { classificationRootDocumentId, locateDocument } from "../src/siyuan/location";
 import { classifyArticle } from "../src/review/classify";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { reviewArticleDetailed } from "../src/review/provider";
@@ -118,6 +118,7 @@ describe("workbench regression", () => {
     fixtures.files.clear(); fixtures.dialogs.length = 0; fixtures.messages.mockClear(); document.body.replaceChildren(); localStorage.clear();
     fixtures.files.set("settings.json", { ...DEFAULT_SETTINGS, firecrawlKey: "test", modelKey: "test", modelName: "test", reviewPerspective: "original" });
     vi.mocked(locateDocument).mockResolvedValue({ id: "20260101000000-aaaaaaa", notebook: "20260101000000-0000000", path: "/20260101000000-aaaaaaa.sy", hpath: "/知流", isNotebook: false });
+    vi.mocked(classificationRootDocumentId).mockImplementation(async root => root.id);
     vi.mocked(discoverCategories).mockResolvedValue([{ id: "20260101000000-bbbbbbb", name: "AI", description: "模型文章", path: "AI", parentId: "20260101000000-aaaaaaa" }]);
     vi.mocked(classifyArticle).mockResolvedValue({ categoryId: "20260101000000-bbbbbbb", confidence: 0.9, reason: "主题匹配" });
     vi.mocked(findArticleDocument).mockResolvedValue(null);
@@ -1118,6 +1119,44 @@ describe("workbench regression", () => {
     checkbox.click(); expect(state.hidden).toBe(true);
     fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>('#entry')!.click();
     expect(document.querySelector<HTMLElement>('[data-role="classificationState"]')!.hidden).toBe(true);
+  });
+  it("keeps the root opener in the location panel and opens an unsaved input while categories are pending", async () => {
+    await launch(); click("showClassification");
+    const manager = vi.mocked(mountCategoryManager).mock.results.at(-1)!.value;
+    manager.refresh.mockImplementation(() => new Promise(() => undefined));
+    click("showClassification");
+    const button = document.querySelector<HTMLButtonElement>('[data-action="openClassificationRoot"]')!;
+    expect(button.closest('[aria-label="分类位置"]')).not.toBeNull();
+    expect(button.hidden).toBe(false); expect(button.disabled).toBe(true);
+    input("rootDocumentId", "20260101000000-aaaaaaa");
+    expect(button.disabled).toBe(false);
+    click("openClassificationRoot");
+    await vi.waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: "20260101000000-aaaaaaa" } })));
+    expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "" });
+    expect(document.querySelector('[data-role="classificationPanel"]')).toBeNull();
+  });
+  it("opens an available notebook document from classification location", async () => {
+    const notebook = "20260101000000-0000000";
+    vi.mocked(locateDocument).mockResolvedValue({ id: notebook, notebook, path: "/", hpath: "", isNotebook: true });
+    await launch(); click("showClassification"); input("rootDocumentId", notebook); click("openClassificationRoot");
+    await vi.waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: notebook } })));
+  });
+  it("keeps the opener visible and reports unavailable notebook documents without closing the page", async () => {
+    vi.mocked(classificationRootDocumentId).mockResolvedValue(null);
+    await launch(); click("showClassification"); input("rootDocumentId", "20260101000000-0000000"); click("openClassificationRoot");
+    await vi.waitFor(() => expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("未启用"), 7000, "error"));
+    expect(openTab).not.toHaveBeenCalled();
+    const button = document.querySelector<HTMLButtonElement>('[data-action="openClassificationRoot"]')!;
+    expect(button.hidden).toBe(false); expect(button.disabled).toBe(false);
+  });
+  it("ignores late root resolution after the input changes", async () => {
+    let finish!: (id: string) => void;
+    vi.mocked(classificationRootDocumentId).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await launch(); click("showClassification"); input("rootDocumentId", "20260101000000-aaaaaaa"); click("openClassificationRoot");
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    input("rootDocumentId", "20260101000000-bbbbbbb"); finish("20260101000000-aaaaaaa");
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="openClassificationRoot"]')!.disabled).toBe(false));
+    expect(openTab).not.toHaveBeenCalled();
   });
   it("keeps classification changes unsaved if persistence fails", async () => {
     const plugin = await launch(); click("showClassification");

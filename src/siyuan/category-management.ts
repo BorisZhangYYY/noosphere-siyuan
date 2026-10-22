@@ -1,6 +1,6 @@
 /** 分类管理仅修改选定根下的分类文档；描述、用户正文与目录分开维护。 */
 import { kernelPost } from "./api";
-import { locateDocument, SIYUAN_ID, sqlLiteral, withinRoot, type DocumentLocation } from "./location";
+import { classificationRootDocumentId, locateDocument, SIYUAN_ID, sqlLiteral, withinRoot, type DocumentLocation } from "./location";
 import { CATEGORY_ATTR, discoverCategories, INDEX_ATTR, OVERVIEW_ROOT_ATTR, refreshCategoryIndex, type CategoryNode } from "./tree";
 import { DESCRIPTION_ATTR, DESCRIPTION_HEADING_ATTR, descriptionSection, readCategoryDescription } from "./category-description";
 import { safeDocumentTitle } from "./destination";
@@ -85,15 +85,9 @@ export async function writeCategoryDescription(id: string, next?: string): Promi
 export async function ensureClassificationRoot(rootId: string): Promise<string | null> {
   return exclusive(`root:${rootId}`, async () => {
     const root = await locateDocument(rootId);
-    if (root.isNotebook) {
-      // 笔记本仍以 / 作为分类范围；是否能承载正文另由内核能力与开关决定。
-      // 关闭功能后旧 .sy 文件可能仍存在，因此不能只凭块存在就写入隐藏文档。
-      const config = await kernelPost<{ conf?: { fileTree?: { boxDocEnabled?: boolean } } }>("/api/system/getConf", {});
-      if (!config.conf?.fileTree?.boxDocEnabled) return null;
-    }
-    const id = root.id;
+    const id = await classificationRootDocumentId(root);
+    if (!id) return null;
     const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id });
-    if (root.isNotebook && attrs.type !== "doc") throw new Error("笔记本根文档尚未就绪，请在思源中打开笔记本后重试");
     let children = await kernelPost<ChildBlock[]>("/api/block/getChildBlocks", { id });
     const section = async (key: string, title: string, legacy: string): Promise<string> => {
       const bound = children.find(child => child.id === attrs[key] && child.type === "h");

@@ -10,12 +10,12 @@ export interface CategoryManager { refresh(): Promise<void>; dispose(): void; se
 /** 列表始终留在配置页内，按已保存的全局根目录读取，根变更后重新加载。 */
 export function mountCategoryManager(host: HTMLElement, app: App, getSettings: () => Settings, onOpenDocument: () => void = () => undefined): CategoryManager {
   let closed = false, busy = false, externalBusy = false, generating = false, editingId: string | undefined, partialId: string | undefined;
-  let settings = getSettings(), categories: CategoryNode[] = [], rootDocumentId: string | null = null;
+  let settings = getSettings(), categories: CategoryNode[] = [];
   let controller = new AbortController(), returnFocus: HTMLElement | null = null;
   let refreshVersion = 0, refreshPending = false;
   const background = host.closest<HTMLElement>(".noosphere") || host;
   let inertState: Array<[HTMLElement, boolean]> = [];
-  host.innerHTML = `<div data-category="browser"><div class="noosphere__panel-title noosphere__category-toolbar"><h3>分类管理</h3><div><button data-category="openRoot" class="b3-button b3-button--outline" type="button" hidden disabled>打开根文档</button><button data-category="refresh" class="b3-button b3-button--outline" type="button">刷新</button><button data-category="new" class="b3-button noosphere__primary" type="button">新增分类</button></div></div><div data-category="list" class="noosphere__category-list"></div></div><p data-category="status" class="noosphere__category-status" role="status" aria-live="polite"></p>`;
+  host.innerHTML = `<div data-category="browser"><div class="noosphere__panel-title noosphere__category-toolbar"><h3>分类管理</h3><div><button data-category="refresh" class="b3-button b3-button--outline" type="button">刷新</button><button data-category="new" class="b3-button noosphere__primary" type="button">新增分类</button></div></div><div data-category="list" class="noosphere__category-list"></div></div><p data-category="status" class="noosphere__category-status" role="status" aria-live="polite"></p>`;
   const holder = document.createElement("div");
   holder.innerHTML = `<div data-category="editor" class="noosphere__category-overlay" hidden><section class="noosphere__category-form noosphere__panel" role="dialog" aria-modal="true" aria-labelledby="noosphere-category-form-title"><h3 data-category="formTitle" id="noosphere-category-form-title">新增分类</h3><label>分类名称<input data-category="name" class="b3-text-field" maxlength="80" placeholder="例如：人工智能"></label><div data-category="parentField" class="noosphere__field"><span class="noosphere__field-label">父分类</span><div class="noosphere__dropdown"><input data-category="parent" type="hidden"><button data-category="parentTrigger" class="noosphere__dropdown-trigger" type="button" aria-label="父分类" aria-haspopup="listbox" aria-expanded="false"><span data-category="parentLabel">根目录</span><svg class="noosphere__chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5"/></svg></button><div data-category="parentMenu" class="noosphere__dropdown-menu" role="listbox" aria-label="父分类" hidden></div></div></div><label>分类描述<textarea data-category="description" class="b3-text-field" rows="6" maxlength="2000" placeholder="说明收录范围、典型文章和与其他分类的边界"></textarea></label><p class="noosphere__field-help">描述同步到文档的「分类描述」区域。AI 生成后可先修改，点击同步才会写入思源。</p><div class="noosphere__category-actions"><button data-category="generate" class="b3-button b3-button--outline" type="button">AI 生成描述</button><button data-category="cancel" class="b3-button b3-button--outline" type="button">取消</button><button data-category="save" class="b3-button noosphere__primary" type="button">新建并同步</button></div><p data-category="editorStatus" class="noosphere__category-status" role="status" aria-live="polite"></p></section></div>`;
   const overlay = holder.firstElementChild as HTMLElement;
@@ -33,8 +33,6 @@ export function mountCategoryManager(host: HTMLElement, app: App, getSettings: (
     if (closed) return;
     const disabled = value || externalBusy;
     [host, overlay].forEach(scope => scope.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLTextAreaElement>("input, button, textarea").forEach(item => { item.disabled = disabled; }));
-    element<HTMLButtonElement>("openRoot").hidden = !rootDocumentId;
-    element<HTMLButtonElement>("openRoot").disabled = disabled || !rootDocumentId;
     // 生成描述时允许取消，取消会终止请求并丢弃晚到结果。
     element<HTMLButtonElement>("cancel").disabled = disabled && !generating;
     for (const key of ["new", "refresh"]) element<HTMLButtonElement>(key).disabled = disabled || !settings.rootDocumentId;
@@ -95,10 +93,10 @@ export function mountCategoryManager(host: HTMLElement, app: App, getSettings: (
     const version = ++refreshVersion;
     const current = getSettings();
     settings = current;
-    if (!current.rootDocumentId) { rootDocumentId = null; categories = []; render(); return; }
+    if (!current.rootDocumentId) { categories = []; render(); return; }
     const result = await loadManagedCategories(current.rootDocumentId);
     if (closed || version !== refreshVersion || current.rootDocumentId !== getSettings().rootDocumentId) return;
-    rootDocumentId = result.rootDocumentId; categories = result.categories; render();
+    categories = result.categories; render();
   };
   const run = async (message: string, operation: () => Promise<void>): Promise<void> => {
     if (busy || externalBusy || closed) return;
@@ -109,7 +107,6 @@ export function mountCategoryManager(host: HTMLElement, app: App, getSettings: (
   };
   element("new").addEventListener("click", () => edit());
   element("cancel").addEventListener("click", () => { if (busy && !controller.signal.aborted) controller.abort(); closeEditor(); });
-  element("openRoot").addEventListener("click", () => { if (rootDocumentId) openDocument(rootDocumentId); });
   element("refresh").addEventListener("click", () => { void run("正在刷新分类…", async () => { await reload(); status(""); }); });
   element("parentTrigger").addEventListener("click", () => {
     const menu = element("parentMenu"); menu.hidden = !menu.hidden;

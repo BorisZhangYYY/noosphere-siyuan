@@ -64,13 +64,13 @@ it('cancels model generation when closed without creating a document', async () 
   await vi.waitFor(() => expect(signal).toBeDefined()); manager.dispose();
   expect(signal?.aborted).toBe(true); expect(createCategory).not.toHaveBeenCalled();
 });
-it('opens the root document from the inline list without creating a management dialog', async () => {
+it('opens a category document from the inline list without creating a management dialog', async () => {
   const closeParent = vi.fn();
   await launch(closeParent);
   expect(dialogs).toHaveLength(0);
-  expect(field<HTMLButtonElement>('openRoot').hidden).toBe(false);
-  click('openRoot');
-  expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: root } }));
+  expect(document.querySelector('[data-category="openRoot"]')).toBeNull();
+  document.querySelectorAll<HTMLButtonElement>('.noosphere__category-item button')[1].click();
+  expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: category } }));
   expect(closeParent).toHaveBeenCalledOnce(); expect(document.querySelector('[data-role="categoryManager"]')).not.toBeNull();
 });
 
@@ -85,20 +85,6 @@ it('opens the form only on request and supports keyboard selection of a parent c
   expect(field('parentLabel').textContent).toBe('AI'); expect(field('parentMenu').hidden).toBe(true);
   expect(options[1].getAttribute('aria-selected')).toBe('true');
   click('cancel'); expect(field('editor').hidden).toBe(true); expect(createCategory).not.toHaveBeenCalled();
-});
-it('does not offer a root document when notebook documents are unavailable', async () => {
-  vi.mocked(loadManagedCategories).mockResolvedValue({ rootDocumentId: null, rootLabel: '笔记本', categories: [] });
-  await launch(); expect(field<HTMLButtonElement>('openRoot').hidden).toBe(true);
-  expect(field<HTMLButtonElement>('openRoot').disabled).toBe(true);
-});
-it('opens an available notebook document using the notebook ID', async () => {
-  const notebook = '20260101000000-0000000';
-  vi.mocked(loadManagedCategories).mockResolvedValue({ rootDocumentId: notebook, rootLabel: '笔记本', categories: [] });
-  await launch();
-  expect(field<HTMLButtonElement>('openRoot').hidden).toBe(false);
-  expect(field<HTMLButtonElement>('openRoot').disabled).toBe(false);
-  click('openRoot');
-  expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: notebook } }));
 });
 
 it('refreshes the inline list when the saved root changes and clears it when unset', async () => {

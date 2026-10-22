@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { attrFromIal, categoryDescription, classificationCandidates, descriptionFromMarkdown, discoverCategories, refreshCategoryIndex, renderCategoryIndex } from "../src/siyuan/tree";
 import { classifyArticle, CLASSIFY_CONFIDENCE } from "../src/review/classify";
 import { articleIdentity, ensureArticleDocument, findArticleDocument, safeDocumentTitle } from "../src/siyuan/destination";
-import { locateDocument, withinRoot, type DocumentLocation } from "../src/siyuan/location";
+import { classificationRootDocumentId, locateDocument, withinRoot, type DocumentLocation } from "../src/siyuan/location";
 import { kernelPost, proxyRequest } from "../src/siyuan/api";
 import { DEFAULT_SETTINGS } from "../src/types";
 import { ensureClassificationRoot } from "../src/siyuan/category-management";
@@ -47,6 +47,11 @@ beforeEach(() => {
 });
 
 describe("notebook root documents", () => {
+  it("resolves an enabled notebook root without loading or changing categories", async () => {
+    override = path => path === "/api/system/getConf" ? { conf: { fileTree: { boxDocEnabled: true } } } : undefined;
+    expect(await classificationRootDocumentId(await locateDocument(box))).toBe(box);
+    expect(calls().map(([path]) => path)).toEqual(["/api/notebook/lsNotebooks", "/api/system/getConf", "/api/attr/getBlockAttrs"]);
+  });
   it.each([
     { conf: { fileTree: { boxDocEnabled: false } } },
     { conf: { fileTree: {} } },
