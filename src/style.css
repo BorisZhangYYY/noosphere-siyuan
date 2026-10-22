@@ -266,8 +266,7 @@
 .noosphere .b3-text-field { font-size:15px; }
 .noosphere__saved,.noosphere__model-results > span,.noosphere__model-options button { font-size:13px; }
 .noosphere__perspective-heading p { font-size:14px; }
-/* 分类管理使用独立滚动窗口，表单与思源文档双向同步。 */
-.noosphere__category-page { height:min(78vh,850px); padding:20px; overflow:auto; gap:16px; }
+/* 分类管理列表直接嵌入配置页，与分类位置保持同级。 */
 .noosphere__category-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .noosphere__category-toolbar > span { min-width:0; overflow-wrap:anywhere; font-size:13px; }
 .noosphere__category-toolbar > div, .noosphere__category-actions { display:flex; flex-wrap:wrap; gap:8px; }
@@ -278,8 +277,8 @@
 .noosphere__category-item > div { display:flex; gap:8px; }
 .noosphere__category-item button { min-height:30px !important; font-size:12px !important; }
 .noosphere__category-actions { margin-top:12px; }
-.noosphere__category-page textarea { resize:vertical; min-height:160px; font:inherit; line-height:1.7; }
-.noosphere__category-status { margin:0; min-height:1.7em; font-size:13px; line-height:1.7; color:var(--b3-theme-on-surface); }
+.noosphere__category-status { margin:8px 0 0; min-height:1.7em; font-size:13px; line-height:1.7; color:var(--b3-theme-on-surface); }
+.noosphere__category-status:empty { display:none; }
 .noosphere__category-status.is-error { color:var(--b3-theme-error); }
 @media (max-width:760px) { .noosphere__category-toolbar { align-items:flex-start; flex-direction:column; } }
 /* 分类配置独立于模型设置，入口位于工作台页签最右侧。 */
@@ -287,12 +286,8 @@
 .noosphere__ai-badge { display:inline-flex; align-items:center; justify-content:center; padding:1px 5px; border-radius:4px; background:var(--ns-soft); color:var(--ns-accent); font-size:11px; font-weight:650; }
 .noosphere__classification { flex:1; min-height:0; overflow:auto; padding:0 3px 16px; }
 .noosphere__classification .noosphere__panel + .noosphere__panel { margin-top:16px; }
-.noosphere__classification-prompt h3 { margin-top:0; font-size:17px; }
-.noosphere__classification-prompt pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.8; padding:16px; border-radius:8px; background:var(--ns-soft); user-select:text; }
 .noosphere__save-mode label { font-family:inherit; font-size:13px; font-weight:400; }
-/* 管理窗口只展示列表，表单居中弹出；父分类菜单统一主题并可滚动。 */
-.noosphere__category-page { padding:0; overflow:hidden; }
-.noosphere__category-browser { flex:1; min-height:0; overflow:auto; padding:20px; }
+/* 仅新增和编辑使用居中弹层，父分类菜单保持独立滚动。 */
 .noosphere__category-toolbar { margin-bottom:20px; }
 .noosphere__category-item { padding:16px 0; }
 .noosphere__category-overlay { position:absolute; inset:0; z-index:40; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.25); }
@@ -304,3 +299,5 @@
 .noosphere__category-form .noosphere__category-actions { justify-content:flex-end; }
 .noosphere__category-form .noosphere__category-actions button:first-child { margin-right:auto; }
 .noosphere__category-form .noosphere__category-status { margin-top:12px; }
+
+.noosphere .noosphere__category-location > label.noosphere__vision-option { margin-top:16px; }

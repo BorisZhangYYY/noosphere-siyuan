@@ -36,7 +36,7 @@ vi.mock("../src/siyuan/destination", async importOriginal => ({ ...await importO
 vi.mock("../src/siyuan/location", async importOriginal => ({ ...await importOriginal<typeof import("../src/siyuan/location")>(), locateDocument: vi.fn() }));
 vi.mock("../src/siyuan/index-maintenance", () => ({ CategoryIndexMaintenance: class { onMessage = vi.fn(); schedule = vi.fn(); stop = vi.fn(); } }));
 vi.mock("../src/siyuan/category-management", () => ({ ensureClassificationRoot: vi.fn().mockResolvedValue("20260101000000-ooooooo") }));
-vi.mock("../src/category-manager", () => ({ openCategoryManager: vi.fn().mockReturnValue(() => undefined) }));
+vi.mock("../src/category-manager", () => ({ mountCategoryManager: vi.fn().mockImplementation(() => ({ refresh: vi.fn().mockResolvedValue(undefined), dispose: vi.fn(), setDisabled: vi.fn() })) }));
 vi.mock("../src/review/classify", () => ({ classifyArticle: vi.fn() }));
 // 原生键盘行为在思源现场验收；这里验证工作台与原生编辑器之间的数据和生命周期。
 vi.mock("../src/article/editor", async importOriginal => ({
@@ -83,7 +83,7 @@ import { appendArticle } from "../src/siyuan/writer";
 import { type CaptureDraft, DRAFT_STORAGE_NAME } from "../src/article/draft";
 import { type CaptureHistory, HISTORY_STORAGE_NAME } from "../src/article/history";
 import { openTab } from "siyuan";
-import { openCategoryManager } from "../src/category-manager";
+import { mountCategoryManager } from "../src/category-manager";
 
 const article = { url: "https://example.com/article", title: "文章标题", markdown: "# 文章标题\n\n原文 ![图](https://example.com/photo.png)" };
 function input(name: string, value: string): void {
@@ -1092,22 +1092,32 @@ describe("workbench regression", () => {
     await launch();
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", classificationSettingsVersion: 1 });
   });
-  it("keeps classification configuration independent from unsaved model settings and displays the live system prompt", async () => {
+  it("keeps classification configuration independent from unsaved model settings without exposing internal prompts", async () => {
     await launch(); await scrape();
     input("modelName", "unsaved-model");
     click("showClassification"); input("rootDocumentId", "20260101000000-aaaaaaa");
-    expect(document.querySelector('[data-role="classificationPanel"]')!.textContent).toContain('你只能从给定的分类列表里选择一个 ID');
+    expect(document.querySelector('[data-role="classificationPanel"]')!.textContent).not.toContain('分类系统提示词');
+    expect(document.querySelector('.noosphere__classification-prompt')).toBeNull();
+    expect(document.querySelector('[aria-label="分类位置"] p')).toBeNull();
     expect(document.querySelector('[data-view="setup"] [data-field="rootDocumentId"]')).toBeNull();
     click("saveClassification"); await ready();
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", modelName: "test" });
     expect(document.querySelector<HTMLElement>('[data-role="classificationPanel"]')!.hidden).toBe(false);
     click("showHistory"); expect(document.querySelector<HTMLElement>('[data-role="classificationPanel"]')!.hidden).toBe(true);
   });
-  it("opens category management with the saved root and preserves the article", async () => {
+  it("shows category management below the location in the same view and preserves the article", async () => {
     await launch(); await scrape();
-    const previous = stored().markdown;
-    click("showClassification"); input("rootDocumentId", "20260101000000-aaaaaaa"); click("manageCategories"); await ready();
-    expect(openCategoryManager).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ rootDocumentId: "20260101000000-aaaaaaa" }), expect.any(Function), expect.any(Function));
+    const previous = stored().markdown, dialogCount = fixtures.dialogs.length;
+    click("showClassification"); input("rootDocumentId", "20260101000000-aaaaaaa"); click("saveClassification"); await ready();
+    const host = document.querySelector<HTMLElement>('[data-role="categoryManager"]')!;
+    expect(host.previousElementSibling?.getAttribute('aria-label')).toBe('分类位置');
+    expect(host.parentElement?.dataset.role).toBe('classificationPanel');
+    expect(document.querySelector('[data-action="manageCategories"]')).toBeNull();
+    expect(fixtures.dialogs).toHaveLength(dialogCount);
+    expect(mountCategoryManager).toHaveBeenCalledWith(host, expect.anything(), expect.any(Function), expect.any(Function));
+    const mounted = vi.mocked(mountCategoryManager).mock.results.at(-1)!.value;
+    expect(mounted.refresh).toHaveBeenCalled();
+    expect(vi.mocked(mountCategoryManager).mock.calls.at(-1)![2]().rootDocumentId).toBe('20260101000000-aaaaaaa');
     expect(stored().markdown).toBe(previous);
   });
   it("waits for the entire review including image processing before automatic saving", async () => {

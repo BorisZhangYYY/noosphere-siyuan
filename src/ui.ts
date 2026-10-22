@@ -10,7 +10,6 @@ const perspectiveOptions = [
   ["novice", "小白视角"],
 ] as const;
 import { OUTPUT_LANGUAGE_OPTIONS } from "./review/language";
-import { CLASSIFY_PROMPT } from "./review/classify-prompt";
 
 /** 与网页端一致的来源、审阅和素材分区，图标跟随思源主题。 */
 function railIcon(kind: "source" | "review" | "assets" | "save"): string {
@@ -83,8 +82,8 @@ export function captureContent(): string {
       <section class="noosphere__history" data-role="historyPanel" aria-label="文章历史记录" hidden><div class="noosphere__history-heading"><div><h3>历史记录</h3><p>查看已抓取的文章，在文章页继续审阅或导入思源。</p></div><input data-role="historySearch" class="b3-text-field" type="search" aria-label="搜索历史文章" placeholder="搜索标题、链接或作者"></div><p class="noosphere__history-empty" data-role="historyEmpty">暂无历史文章，成功抓取后会自动保留。</p><div class="noosphere__history-list" data-role="historyList"></div></section>
       <section class="noosphere__classification" data-role="classificationPanel" aria-label="分类配置" hidden>
         <div class="noosphere__page-heading"><h2>分类配置</h2><div class="noosphere__settings-actions"><span data-role="classificationState" role="status" aria-live="polite"></span><button data-action="saveClassification" class="b3-button noosphere__primary" type="button">保存</button></div></div>
-        <section class="noosphere__panel"><div class="noosphere__panel-title"><h3>分类位置</h3><span class="noosphere__ai-badge">AI</span></div><label>分类根目录<input data-field="rootDocumentId" class="b3-text-field" placeholder="输入根文档 ID，也兼容笔记本 ID"></label><p class="noosphere__field-help">选择根文档后，会直接在该文档内维护「目录」和「说明」。笔记本没有正文，选择笔记本时不会额外创建总览文档。</p><label class="noosphere__vision-option"><input type="checkbox" data-field="autoCreateIndex">自动创建并维护分类目录</label><p class="noosphere__field-help">分类根文档始终维护分类树；此开关控制各分类文档的文章目录。承担目录树的文档默认锁定，文章保持可编辑。分类描述可通过分类管理同步，也可解锁文档后直接编辑。</p><button data-action="manageCategories" class="b3-button b3-button--outline" type="button">分类管理</button></section>
-        <section class="noosphere__panel noosphere__classification-prompt"><h3>分类系统提示词</h3><p class="noosphere__field-help">使用当前文字模型，仅选择已有分类。每次请求另附分类 ID、完整路径、描述、文章标题及正文前 4000 个字符；置信度低于 0.6 时保存到根目录。</p><pre>${CLASSIFY_PROMPT}</pre></section>
+        <section class="noosphere__panel noosphere__category-location" aria-label="分类位置"><div class="noosphere__panel-title"><h3>分类位置</h3></div><label>分类根目录<input data-field="rootDocumentId" class="b3-text-field" placeholder="输入根文档或笔记本 ID"></label><label class="noosphere__vision-option"><input type="checkbox" data-field="autoCreateIndex">自动创建并维护分类目录</label></section>
+        <section class="noosphere__panel noosphere__category-manager" data-role="categoryManager" aria-label="分类管理"></section>
       </section>
     </main>
     <div class="noosphere__lightbox" data-role="imageLightbox" hidden><section role="dialog" aria-modal="true" aria-label="图片详情"><div class="noosphere__lightbox-heading"><h3 data-role="imageTitle"></h3><button data-action="closeImage" type="button" aria-label="关闭图片详情">×</button></div><img data-role="imageLarge" alt=""><p data-role="imageDescription"></p><a data-role="imageSource" target="_blank" rel="noopener noreferrer">打开图片来源 ↗</a><button data-action="toggleImage" class="b3-button b3-button--outline" type="button">移除图片</button></section></div>

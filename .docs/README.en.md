@@ -34,9 +34,8 @@ Capture new articles at the top, read and edit the body on the left, and review 
 
 ### Prepare categories
 
-- Open Category management to see the category list. Add category and Edit open a form; choose a parent using the dropdown and write a description, or generate a draft with AI. Confirm synchronization to write the category and description to SiYuan.
+- The category list appears directly below the location in Classification configuration. Add category and Edit open a form; choose a parent using the dropdown and write a description, or generate a draft with AI. Confirm synchronization to write the category and description to SiYuan.
 - A selected root document contains the managed directory followed by usage instructions. A notebook has no body, so no separate overview document is created. Category pages are locked by default; use Category management or unlock them in SiYuan to edit the description. Renaming a marked heading preserves its identity.
-- Classification configuration displays the exact system prompt. The model receives category IDs, full paths, descriptions, the article title and its first 4,000 characters. It can select only an existing ID; confidence below 0.6 falls back to the root.
 - Enable automatic directory creation to append a managed index below each category introduction on its first article save. Alternatively, mark an existing list block with a nonempty `custom-zl-index` attribute. Saving or opening the document refreshes its marked index; a failed refresh can be retried separately.
 - Unmatched articles and classification-service failures save into a separate article document at the anchor root, with an explanation. Repeated saves of the same source update the existing article, even after a title change. Different sources with identical titles get separate document names; unrelated notes are preserved.
 

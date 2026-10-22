@@ -13,7 +13,7 @@ import { refreshCategoryIndex } from "./siyuan/tree";
 import { CategoryIndexMaintenance } from "./siyuan/index-maintenance";
 import { CategoryIndexReadonly } from "./siyuan/index-readonly";
 import { ensureClassificationRoot } from "./siyuan/category-management";
-import { openCategoryManager } from "./category-manager";
+import { mountCategoryManager, type CategoryManager } from "./category-manager";
 import type { ClassificationResult } from "./review/classify";
 import { prepareClassification, validateClassification, type ClassificationPlan } from "./review/classification-plan";
 import { removePluginStorage } from "./siyuan/cleanup";
@@ -47,7 +47,6 @@ export default class NoospherePlugin extends Plugin {
     error => showMessage(`目录同步失败：${String(error)}`, 7000, "error"));
   private readonly indexReadonly = new CategoryIndexReadonly(document);
   private captureDialog: Dialog | null = null;
-  private closeCategoryManager: (() => void) | null = null;
   private captureBusy = false;
   private resumeCaptureDialog: (() => void) | null = null;
   private uninstalled = false;
@@ -179,7 +178,6 @@ export default class NoospherePlugin extends Plugin {
   }
 
   onunload(): void {
-    this.closeCategoryManager?.();
     this.indexReadonly.stop();
     this.eventBus.off("loaded-protyle-static", this.onCategoryDocumentLoaded);
     this.eventBus.off("ws-main", this.indexMaintenance.onMessage);
@@ -269,11 +267,13 @@ export default class NoospherePlugin extends Plugin {
     let historyVisible = false;
     let selectedImage: ImageDecision | undefined;
     let persistDraft: (delayMs?: number) => void = () => undefined;
+    let categoryManager: CategoryManager | undefined;
     const createDialog = (): Dialog => new Dialog({
       title: "知流",
       width: `${Math.min(1360, window.innerWidth - 32)}px`,
       content: captureContent(),
       destroyCallback: () => {
+        categoryManager?.dispose(); categoryManager = undefined;
         finishArticleEditing(); disposeArticleEditor();
         dialogClosed = true; playback?.setPaused(true);
         streamFollower?.setEnabled(false);
@@ -590,8 +590,9 @@ export default class NoospherePlugin extends Plugin {
         || (autoMode ? !this.settings.rootDocumentId.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("retryIndex").disabled = busy || !indexDocumentId;
       action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
-      for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "manageCategories", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
+      for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
+      categoryManager?.setDisabled(busy || savingSettings);
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       role("providerList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       root.querySelectorAll<HTMLButtonElement>("[data-select-trigger], [data-select-option], [data-reveal]").forEach(button => { button.disabled = busy; });
@@ -722,6 +723,7 @@ export default class NoospherePlugin extends Plugin {
       root.querySelector<HTMLElement>(".noosphere__work-content")!.hidden = true;
       role("historyPanel").hidden = true;
       role("classificationPanel").hidden = false;
+      void categoryManager?.refresh();
       for (const name of ["showCapture", "showHistory", "showClassification"]) {
         const selected = name === "showClassification";
         action(name).classList.toggle("is-active", selected);
@@ -1030,6 +1032,7 @@ export default class NoospherePlugin extends Plugin {
       dialog.element.querySelector<HTMLElement>(".noosphere")!.replaceWith(root);
       this.captureDialog = dialog;
       dialogClosed = false;
+      mountCategories();
       if (playback && streamingMarkdown && renderer && article) {
         previewMarkdown = streamingMarkdown;
         playback.update(reviewPreviewText(previewMarkdown, article.url, renderer));
@@ -1535,18 +1538,12 @@ export default class NoospherePlugin extends Plugin {
     };
     refreshClassificationState();
     action("saveClassification").addEventListener("click", () => {
-      void run("保存分类配置", async () => { await saveClassification(); return "分类配置已保存"; });
+      void run("保存分类配置", async () => { await saveClassification(); return "分类配置已保存"; }).then(() => categoryManager?.refresh());
     });
-    action("manageCategories").addEventListener("click", () => {
-      if (busy || savingSettings) return;
-      void run("打开分类管理", async () => {
-        const settings = await saveClassification();
-        if (!settings.rootDocumentId) throw new Error("请先填写分类根目录");
-        this.closeCategoryManager?.();
-        this.closeCategoryManager = openCategoryManager(this.app, settings, () => { this.closeCategoryManager = null; }, () => this.captureDialog?.destroy());
-        return "";
-      });
-    });
+    const mountCategories = (): void => {
+      categoryManager = mountCategoryManager(role("categoryManager"), this.app, () => this.settings, () => this.captureDialog?.destroy());
+    };
+    mountCategories();
     action("scrape").addEventListener("click", () => {
       void run("抓取", async () => {
         const settings = await saveSettings();
