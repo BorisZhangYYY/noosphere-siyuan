@@ -5,7 +5,6 @@ import { modelEndpoint } from "./endpoint";
 import { imageIdentity, isArticleImagePlaceholder, localAssetPath, resolveImageReference } from "../images/reference";
 import { conciseRequestError } from "../siyuan/errors";
 
-const IMAGE = /!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g;
 const IMAGE_CONCURRENCY = 2;
 const IMAGE_REVIEW_TIMEOUT_MS = 120000;
 const PROMPT = `你正在审阅文章图片。只返回 JSON：{"classification":"RELEVANT"或"PROMOTION","description":"一句简短客观的图片描述"}。
@@ -63,12 +62,30 @@ export function imageReviewSettings(settings: Settings): Settings {
   return result;
 }
 
+/** 只处理展示用配图，保留围栏、缩进代码和行内代码中的图片语法示例。 */
+function mapImages(markdown: string, transform: (full: string, alt: string, raw: string) => string): string {
+  let fence: string | undefined;
+  return markdown.split(/(\r?\n)/).map((line: string): string => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker) {
+      if (!fence) fence = marker;
+      else if (marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = undefined;
+      return line;
+    }
+    if (fence || /^(?: {4}|\t)/.test(line)) return line;
+    return line.replace(/(`+).*?\1|!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g,
+      (full: string, code: string | undefined, alt: string, raw: string): string => code ? full : transform(full, alt, raw));
+  }).join("");
+}
+
 function refs(markdown: string, articleUrl: string): ImageRef[] {
-  return [...markdown.matchAll(IMAGE)].filter(match => !isArticleImagePlaceholder(match[2], articleUrl)).map(match => {
-    const raw = match[2].replace(/^<|>$/g, "");
-    const url = resolveImageReference(raw, articleUrl);
-    return { full: match[0], raw, alt: match[1], url };
+  const result: ImageRef[] = [];
+  mapImages(markdown, (full: string, alt: string, value: string): string => {
+    const raw = value.replace(/^<|>$/g, "");
+    if (!isArticleImagePlaceholder(raw, articleUrl)) result.push({ full, raw, alt, url: resolveImageReference(raw, articleUrl) });
+    return full;
   });
+  return result;
 }
 
 function responseText(body: string, format: Settings["modelFormat"]): string {
@@ -183,17 +200,21 @@ export async function reviewImages(article: Article, summary: string, settings: 
   return snapshot();
 }
 
-/** Restore images a text model omitted, anchored after the nearest surviving source line. */
+/** 拒绝文字模型新增或改写的图片地址，再按原文位置补回遗漏配图。 */
 export function restoreImages(markdown: string, source: Article, kept: ImageRef[] = refs(source.markdown, source.url)): string {
-  let result = markdown;
+  const allowed = new Set(kept.map(image => image.url));
+  let result = mapImages(markdown, (full: string, _alt: string, raw: string): string =>
+    allowed.has(resolveImageReference(raw.replace(/^<|>$/g, ""), source.url)) ? full : "");
+  const present = new Set(refs(result, source.url).map(image => image.url));
   const sourceLines = source.markdown.split("\n");
   for (const image of kept) {
-    if (result.includes(image.full) || (image.url && result.includes(`](${image.url})`))) continue;
+    if (present.has(image.url)) continue;
     const index = sourceLines.findIndex(line => line.includes(image.full));
     const anchor = sourceLines.slice(0, index).reverse().find(line => line.trim() && !line.includes("!["))?.trim();
     const position = anchor ? result.indexOf(anchor) : -1;
     if (position >= 0) result = `${result.slice(0, position + anchor!.length)}\n\n${image.full}${result.slice(position + anchor!.length)}`;
     else result = `${result.trimEnd()}\n\n${image.full}\n`;
+    present.add(image.url);
   }
   return result;
 }
@@ -201,5 +222,5 @@ export function restoreImages(markdown: string, source: Article, kept: ImageRef[
 /** Apply only the user's current image choices to the reviewed draft. */
 export function applyImageDecisions(markdown: string, decisions: ImageDecision[]): string {
   const removed = new Set(decisions.filter(item => item.remove).map(item => item.full));
-  return markdown.replace(IMAGE, full => removed.has(full) ? "" : full).replace(/\n{3,}/g, "\n\n");
+  return mapImages(markdown, (full: string): string => removed.has(full) ? "" : full).replace(/\n{3,}/g, "\n\n");
 }

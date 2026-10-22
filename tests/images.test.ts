@@ -40,6 +40,43 @@ it("cancels all vision workers without marking images failed or starting more re
 });
 
 describe("image review", () => {
+  it("removes a model-invented image before vision requests and restores the actual source image", async () => {
+    const requests = mockReview("RELEVANT");
+    const fixture = fetch;
+    const invented = "https://example.com/pci.png";
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
+      const request = JSON.parse(options!.body as string);
+      if (request.method === "POST" && !JSON.stringify(request.payload).includes("aGVsbG8=")) {
+        return { ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+          title: "Example", markdown: `## 正文\n\nEvidence\n\n![wrong](${invented})\n\nEnd`, summary: "摘要",
+        }) } }] }) } }) };
+      }
+      return fixture(path, options);
+    }));
+    const result = await reviewArticleDetailed(article, settings);
+    expect(result.markdown).toContain("![screenshot](https://example.com/pic.png)");
+    expect(result.markdown).not.toContain(invented);
+    expect(result.imageDecisions).toHaveLength(1);
+    expect(result.imageWarnings).toEqual([]);
+    expect(requests.filter(request => request.method === "GET").map(request => request.url)).toEqual(["https://example.com/pic.png"]);
+  });
+
+  it("keeps valid source URLs with edited captions or relative forms, including images added to the input draft", () => {
+    const source = { ...article, markdown: "Evidence\n\n![original](/pic.png)\n\n![本地](assets/local.png)" };
+    const reviewed = "Evidence\n\n![new caption](https://example.com/pic.png)\n\n![本地](/assets/local.png)\n\n![fake](https://example.com/made-up.png)";
+    expect(restoreImages(reviewed, source)).toBe(reviewed.replace("![fake](https://example.com/made-up.png)", ""));
+  });
+
+  it("treats image syntax in code as examples rather than display images or restored image evidence", () => {
+    const example = "![example](https://example.com/example.png)";
+    const code = `\`\`\`\`md\n${example}\n\`\`\`\n${example}\n\`\`\`\`\n\n~~~md\n${example}\n~~~\n\n    ${example}\n\n\`${example}\``;
+    const markdown = `${code}\n\n${article.markdown}`;
+    expect(imageInventory(markdown, article.url)).toHaveLength(1);
+    expect(restoreImages(code, { ...article, markdown })).toContain(code);
+    expect(applyImageDecisions(markdown, [{ full: example, alt: "example", url: "https://example.com/example.png", remove: true, recommendedRemove: true, description: "移除" }])).toContain(code);
+    expect(imageInventory(restoreImages(`\`${article.markdown.match(/!\[[^\]]*\]\([^)]*\)/)![0]}\``, article), article.url)).toHaveLength(1);
+  });
+
   it("shares one decision across WeChat dimensions, tracking parameters and protocols", async () => {
     const requests = mockReview("PROMOTION");
     const source = { ...article, markdown: "![头像](http://mmbiz.qpic.cn/sz_mmbiz_png/asset/300?wx_fmt=png&wxfrom=19)\n![头像](http://mmbiz.qpic.cn/sz_mmbiz_png/asset/0?wx_fmt=png)\n![头像](https://mmbiz.qpic.cn/sz_mmbiz_png/asset/0?wx_fmt=png)" };

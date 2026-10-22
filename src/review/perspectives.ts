@@ -1,13 +1,14 @@
 /** Review viewpoints and free-form article-format instructions. */
 import { composeArticle } from "../article/compose";
 import { outputLanguagePrompt } from "./language";
+import { nestReviewBodyHeadings } from "./headings";
 import type { Article, ReviewPerspective, Settings } from "../types";
 
 const COMMON_PROMPT = `你正在把抓取到的文章整理为个人知识库中的可信审阅稿。
 
 ## 信息边界
 - 保留事实、数据、阈值、引文、代码、表格、推理链、失败经验和关键类比；不得编造来源或强化原文结论。
-- 保留有效图片和链接及其叙事位置，不得创建虚构图片地址。
+- 保留有效图片和链接及其叙事位置；图片地址必须逐字复制输入中的地址，不得增删字符、改写路径或添加输入中不存在的图片。
 - 删除广告、推广、关注订阅提示、平台交互噪音和跟踪文本；有事实与限定条件的旁白必须保留。
 
 ## 输出
@@ -36,7 +37,7 @@ export const REVIEW_PERSPECTIVES: Record<"original" | "novice", ReviewPerspectiv
 
 ## 正文
 
-（沿用原文的章节与论证顺序，完整整理事实、推理、代码、表格、引文、链接和相关图片。需要分节时沿用原文小标题，不把完整正文压缩为摘要。）
+（沿用原文的章节与论证顺序，完整整理事实、推理、代码、表格、引文、链接和相关图片。原文章节属于“正文”的子章节，从 ### 开始，内部小标题继续向下嵌套，保留相对层级。不要把原文章节与 ## 正文并列，不把完整正文压缩为摘要。）
 `,
   },
   novice: {
@@ -63,7 +64,7 @@ export const REVIEW_PERSPECTIVES: Record<"original" | "novice", ReviewPerspectiv
 
 ## 正文与讲解
 
-（保留原文顺序、章节、事实、引用、链接和图片。在相应段落旁解释隐含跳步与必要概念；AI 补充用注明模型的引用块标识。）
+（保留原文顺序、章节、事实、引用、链接和图片。原文章节属于“正文与讲解”的子章节，从 ### 开始，内部小标题继续向下嵌套，保留相对层级。在相应段落旁解释隐含跳步与必要概念；AI 补充用注明模型的引用块标识。）
 `,
   },
 };
@@ -139,7 +140,7 @@ function sourceSupports(value: string, evidence: string, isDate: boolean): boole
 
 /** Accept only evidence-backed metadata for fields the crawler left empty. */
 export function parseReviewResult(response: string, article: Article, settings: Settings): ReviewResult {
-  getPerspective(settings);
+  const perspective = getPerspective(settings);
   const candidate = response.trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
   let parsed: { title?: unknown; markdown?: unknown; summary?: unknown; metadata_candidates?: Record<string, unknown> };
   try { parsed = JSON.parse(candidate) as typeof parsed; }
@@ -163,6 +164,7 @@ export function parseReviewResult(response: string, article: Article, settings: 
   let markdown = parsed.markdown.trim().replace(/^#\s+[^\n]*\n+/, "");
   markdown = markdown.replace(/^(?:>\s*(?:来源|Source|作者|Author|发布时间|Published)\s*[:：][^\n]*(?:\n|$)\s*)+/i, "").trim();
   if (!markdown) throw new Error("AI 审阅结果缺少正文");
+  markdown = nestReviewBodyHeadings(markdown, perspective.id);
   return { markdown: composeArticle(enriched, `# ${title}\n\n${markdown}`), article: enriched, summary: parsed.summary.trim().slice(0, 1600), metadataAccepted };
 }
 
