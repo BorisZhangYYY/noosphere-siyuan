@@ -174,13 +174,37 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     expect((await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: unrelated })).kramdown).toContain('不要覆盖');
     await expect(createCategory(rootId, { name: '范围外', description: '规则', parentId: outside })).rejects.toThrow('移出');
   }, 20000);
-  it("does not create an overview when the selected root is a notebook", async () => {
+  it("uses the native notebook document without creating an overview or changing the classification scope", async () => {
     const existing = await create('/分类总览', '用户已有同名文档');
-    expect(await ensureClassificationRoot(notebook)).toBeNull();
+    await kernelPost('/api/block/appendBlock', { parentID: notebook, dataType: 'markdown', data: '笔记本中的用户说明必须保留。' });
+    expect(await ensureClassificationRoot(notebook)).toBe(notebook);
+    const top = await createCategory(notebook, { name: '笔记本根分类', description: '笔记本顶层分类', parentId: notebook });
+    const nested = await createCategory(notebook, { name: '子分类', description: '嵌套分类', parentId: top });
+    const anchor = await locateDocument(notebook);
+    expect(anchor).toMatchObject({ id: notebook, path: '/', hpath: '', isNotebook: true });
+    expect((await locateDocument(top)).hpath).toBe('/笔记本根分类');
+    const saved = await ensureArticleDocument(notebook, { ...article, url: 'https://example.com/notebook-root', title: '根下文章' }, '未匹配分类的正文', { root: anchor });
+    expect((await locateDocument(saved.documentId)).hpath).toBe('/根下文章');
+    const managed = await loadManagedCategories(notebook);
+    expect(managed.rootDocumentId).toBe(notebook);
+    expect(managed.categories.find(node => node.id === nested)?.path).toBe('笔记本根分类 / 子分类');
+    const content = async (): Promise<string> => (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: notebook })).kramdown;
+    const md = await content();
+    expect(md).toContain('笔记本中的用户说明必须保留');
+    expect(md).toContain(top); expect(md).toContain(nested); expect(md).not.toContain(saved.documentId);
+    expect(md.indexOf('## 目录')).toBeLessThan(md.indexOf('## 说明'));
+    expect(md.match(/## 目录/g)).toHaveLength(1); expect(md.match(/## 说明/g)).toHaveLength(1);
+    expect((await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: notebook }))['custom-sy-readonly']).toBe('true');
+    await kernelPost('/api/filetree/renameDocByID', { id: top, title: '笔记本分类改名' });
+    await refreshCategoryIndex(notebook);
+    expect(await content()).toContain('笔记本分类改名');
+    await kernelPost('/api/filetree/removeDocByID', { id: nested });
+    await refreshCategoryIndex(notebook);
+    expect(await content()).not.toContain(nested);
     const ids = await kernelPost<string[]>('/api/filetree/getIDsByHPath', { notebook, path: '/分类总览（2）' });
     expect(ids).toEqual([]);
     expect((await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: existing })).kramdown).toContain('用户已有同名文档');
-  });
+  }, 20000);
   it("migrates owned root sections and preserves their bindings after a rename", async () => {
     const id = await create('/旧版根结构', '保留用户正文。\n\n## 分类使用说明\n\n旧说明\n{: custom-zl-classification-help="PLACEHOLDER"}\n\n## 全部分类\n\n暂无分类。\n{: custom-zl-index="true"}');
     await attrs(id, { 'custom-zl-overview-root': id });

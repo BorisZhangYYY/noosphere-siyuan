@@ -7,7 +7,7 @@ export interface DocumentLocation { id: string; notebook: string; path: string; 
 /** SQL 接口没有绑定参数，所有字符串都按字面量转义。 */
 export function sqlLiteral(value: string): string { return `'${value.replace(/'/g, "''")}'`; }
 
-/** 笔记本的文档树根路径为 /，普通块不能作为分类锚点。 */
+/** 笔记本的分类范围始终为 /；即使有同 ID 的顶层文档，也不改变子文档的真实路径。 */
 export async function locateDocument(documentId: string, signal?: AbortSignal): Promise<DocumentLocation> {
   const id = documentId.trim();
   if (!SIYUAN_ID.test(id) && !/^\d{14}$/.test(id)) throw new Error("请输入有效的思源笔记本或文档 ID");

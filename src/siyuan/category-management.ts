@@ -81,13 +81,19 @@ export async function writeCategoryDescription(id: string, next?: string): Promi
   await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { "custom-zl-desc": "" } });
 }
 
-/** 根文档承载目录和说明；笔记本没有正文，不再生成独立总览文档。 */
+/** 普通根文档与启用的顶层笔记本文档共用目录结构，不额外创建总览文档。 */
 export async function ensureClassificationRoot(rootId: string): Promise<string | null> {
   return exclusive(`root:${rootId}`, async () => {
     const root = await locateDocument(rootId);
-    if (root.isNotebook) return null;
+    if (root.isNotebook) {
+      // 笔记本仍以 / 作为分类范围；是否能承载正文另由内核能力与开关决定。
+      // 关闭功能后旧 .sy 文件可能仍存在，因此不能只凭块存在就写入隐藏文档。
+      const config = await kernelPost<{ conf?: { fileTree?: { boxDocEnabled?: boolean } } }>("/api/system/getConf", {});
+      if (!config.conf?.fileTree?.boxDocEnabled) return null;
+    }
     const id = root.id;
     const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id });
+    if (root.isNotebook && attrs.type !== "doc") throw new Error("笔记本根文档尚未就绪，请在思源中打开笔记本后重试");
     let children = await kernelPost<ChildBlock[]>("/api/block/getChildBlocks", { id });
     const section = async (key: string, title: string, legacy: string): Promise<string> => {
       const bound = children.find(child => child.id === attrs[key] && child.type === "h");

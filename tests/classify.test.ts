@@ -7,6 +7,7 @@ import { articleIdentity, ensureArticleDocument, findArticleDocument, safeDocume
 import { locateDocument, withinRoot, type DocumentLocation } from "../src/siyuan/location";
 import { kernelPost, proxyRequest } from "../src/siyuan/api";
 import { DEFAULT_SETTINGS } from "../src/types";
+import { ensureClassificationRoot } from "../src/siyuan/category-management";
 
 vi.mock("../src/siyuan/api", () => ({ kernelPost: vi.fn(), proxyRequest: vi.fn() }));
 const box = "20260101000000-0000000", rootId = "20260101000000-aaaaaaa", ai = "20260101000000-bbbbbbb", llm = "20260101000000-ccccccc", outside = "20260101000000-ddddddd", saved = "20260101000000-eeeeeee", index = "20260101000000-fffffff";
@@ -42,6 +43,27 @@ beforeEach(() => {
     if (path === "/api/filetree/listDocsByPath") return { files: [{ id: saved, name: '文章标题.sy' }] };
     if (path === "/api/attr/setBlockAttrs" || path === "/api/sqlite/flushTransaction" || path === "/api/filetree/renameDocByID") return null;
     throw new Error(`unexpected ${path}`);
+  });
+});
+
+describe("notebook root documents", () => {
+  it.each([
+    { conf: { fileTree: { boxDocEnabled: false } } },
+    { conf: { fileTree: {} } },
+  ])("does not touch notebook content when the feature is disabled or unavailable: %j", async config => {
+    override = path => path === "/api/system/getConf" ? config : undefined;
+    expect(await ensureClassificationRoot(box)).toBeNull();
+    expect(calls().map(([path]) => path)).toEqual(["/api/notebook/lsNotebooks", "/api/system/getConf"]);
+  });
+  it("does not write to an unavailable document when the notebook feature is enabled", async () => {
+    override = path => path === "/api/system/getConf" ? { conf: { fileTree: { boxDocEnabled: true } } }
+      : path === "/api/attr/getBlockAttrs" ? {} : undefined;
+    await expect(ensureClassificationRoot(box)).rejects.toThrow("根文档尚未就绪");
+    expect(calls().some(([path]) => path.startsWith("/api/block/"))).toBe(false);
+  });
+  it("reports configuration read failures instead of silently treating a modern notebook as legacy", async () => {
+    override = path => { if (path === "/api/system/getConf") throw new Error("连接中断"); };
+    await expect(ensureClassificationRoot(box)).rejects.toThrow("连接中断");
   });
 });
 

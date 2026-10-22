@@ -68,7 +68,7 @@ npm run package
 
 ## 内核集成验证
 
-`tests/siyuan.integration.test.ts` 默认跳过；需要独立的本机思源测试内核。设置 `SIYUAN_TEST_URL`（HTTPS 地址）和 `SIYUAN_TEST_TOKEN`（该临时工作空间的 API Token）后，运行 `npx vitest run tests/siyuan.integration.test.ts`。测试会创建并删除带“知流集成测试”前缀的临时笔记本，不应指向日常工作空间。自签名证书处理仅存在于集成测试中。
+`tests/siyuan.integration.test.ts` 默认跳过；需要独立的本机思源测试内核，并开启“顶层笔记本文档”以覆盖笔记本根的目录维护。设置 `SIYUAN_TEST_URL`（HTTPS 地址）和 `SIYUAN_TEST_TOKEN`（该临时工作空间的 API Token）后，运行 `npx vitest run tests/siyuan.integration.test.ts`。测试会创建并删除带“知流集成测试”前缀的临时笔记本，不应指向日常工作空间。自签名证书处理仅存在于集成测试中。
 
 测试覆盖真实分类 SQL、正文介绍、文档创建与来源查重、同名保护及目录重写。读取 SQL 前同步内核写入队列，避免刚创建的来源标记或目录块尚未索引时重复创建。
 
