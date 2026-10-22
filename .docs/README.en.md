@@ -15,6 +15,8 @@ Capture web articles inside SiYuan, optionally review them with AI, edit them wi
 - Preserve source metadata in separate paragraphs and keep searchable article history with processing results and destination choices.
 - Set the actual document title when saving to an empty unnamed document. Append an article to an existing document without replacing its content.
 
+WeChat captures can fill missing author and publication fields from explicit article metadata and remove reader or comment interface text. Old and new Xiaoheihe share links are normalized to article URLs, with title cleanup and recovery. Recognized article cards provide missing author and date fields; comments and recommendations are removed while article images and polls are preserved. Zhihu login or verification pages are reported as capture failures.
+
 ## Requirements
 
 Requires **SiYuan 3.8.6 or later**. The declared environments are Windows, macOS and Linux desktop clients, desktop windows, and desktop browser frontends, including Docker deployments. Mobile clients and SiYuan publishing-service pages are outside the supported scope.
