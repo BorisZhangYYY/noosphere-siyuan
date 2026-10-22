@@ -29,7 +29,15 @@ Capture new articles at the top, read and edit the body on the left, and review 
 2. Configure your Firecrawl API key. Configure text and optional vision models if you want AI review.
 3. Paste a URL at the top and capture it. Inspect the article on the left; click Edit to make changes, then Confirm to keep them.
 4. Optionally choose a review perspective and output language on the right, then start AI review. Click an image thumbnail to inspect it and select its checkbox to remove it.
-5. Copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
+5. In manual mode, copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
+6. Open **Classification configuration** at the far right of the workbench tabs (marked AI), then enter a **notebook or root-document ID** as the anchor and save. Select automatic classification in the article save area. Destination fields are hidden in automatic mode; change the root only in Classification configuration. Once both text and image review finish successfully, the article is classified and saved automatically. Cancellation or review failure does not save it; a failed save keeps the completed review for retry.
+
+### Prepare categories
+
+- The category list appears directly below the location in Classification configuration. Add category and Edit open a form; choose a parent using the dropdown and write a description, or generate a draft with AI. Generation uses only the current category name and parent path, focusing on its topics, scope, and typical articles without comparisons or redirection to other categories. Confirm synchronization to write the category and description to SiYuan.
+- A selected root document contains the managed directory followed by usage instructions. Open root document appears beside the root ID field under Classification location and opens the currently entered location independently of the category list. When SiYuan's top-level notebook document feature is enabled, a notebook anchor uses its own root document. Older versions or disabled notebook documents still support notebook-wide classification without creating a separate overview. Category pages are locked by default; use Category management or unlock them in SiYuan to edit the description. Renaming a marked heading preserves its identity.
+- Root and category directories recursively show all descendant documents in SiYuan's order, including articles and unmarked folders. Index pages use 📚 and bold titles; content pages use 📄 and regular titles. Titles remain native dynamic references. Root instructions use eight short bullet points. Enable automatic directory creation to append a managed index below each category introduction on its first article save. Alternatively, mark an existing list block with a nonempty `custom-zl-index` attribute. Saving or opening the document refreshes its marked index; a failed refresh can be retried separately.
+- Unmatched articles and classification-service failures save into a separate article document at the anchor root, with an explanation. Repeated saves of the same source update the existing article, even after a title change. Different sources with identical titles get separate document names; unrelated notes are preserved.
 
 Perspectives and article formats apply when you start AI review. Captured articles can also be saved directly. The original-author and novice perspectives are built in, read-only and cannot be deleted; add a custom perspective to make adjustments.
 
@@ -39,13 +47,13 @@ Use Save beside the Settings heading; it stays visible while scrolling and keeps
 
 Drag providers to reorder them, then save Settings to keep the order. You can also focus a provider and use Alt/Option + Up/Down.
 
-The plugin creates no draft documents, notebooks or folders. Each article keeps its own destination choice. Saving changed content to an existing document appends another import; it does not synchronize with an earlier import.
+The plugin creates no extra draft documents or notebooks. Manual mode retains per-article destinations and appends imports. Automatic mode remembers the anchor and updates the same source article. Changes made after an automatic save can be saved again with Save Article.
 
 Changes between versions are recorded in the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md).
 
 ## Services and data
 
-Capture sends the URL to Firecrawl. AI review sends the article text to your configured text model; vision review sends images and an article summary to your configured image model. Service charges and quotas are determined by the providers.
+Capture sends the URL to Firecrawl. AI review sends the article text to your configured text model; automatic classification also sends category paths, descriptions and an article excerpt to that model; vision review sends images and an article summary to your configured image model. Service charges and quotas are determined by the providers.
 
 Settings, API keys and article records are stored in the current workspace's plugin storage. Imported text and downloaded images are stored in SiYuan documents and assets. Closing, disabling or upgrading the plugin preserves article records.
 

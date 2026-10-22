@@ -24,6 +24,13 @@ export interface CaptureDraft {
   reviewedMarkdown: string;
   imageDecisions: ImageDecision[];
   targetDocumentId: string;
+  /** 仅兼容旧草稿并供一次性迁移读取；新草稿不再保存全局分类设置。 */
+  rootDocumentId?: string;
+  autoCreateIndex?: boolean;
+  /** 仅自动落库记录可用于更新绑定，不能使用手动追加的文档 ID。 */
+  autoSave?: { rootId: string; documentId: string; sourceKey: string };
+  /** 目录失败时保留重试目标，文章落库结果不受影响。 */
+  indexDocumentId?: string;
   perspective: string;
   outputLanguage?: import("../review/language").OutputLanguage;
   savedDocumentId: string;
@@ -35,6 +42,10 @@ export interface CaptureDraft {
   /** 原生编辑的块结构与 Markdown 一起保存，颜色、块属性和引用不会因恢复而丢失。 */
   editorState?: ArticleEditorState;
   bodyEdited?: boolean;
+  /** 保存方式随文章保留，恢复工作台后仍停在上次选择。 */
+  saveMode?: import("../types").SaveMode;
+  /** 最近一次自动分类的落点与理由，仅用于展示，不作为下次落库依据。 */
+  classification?: { categoryId: string | null; confidence: number; reason: string };
 }
 
 export interface ArticleEditorState { markdown: string; nativeMarkdown: string; blockDOM: string; fullBlockDOM?: string }
@@ -54,6 +65,16 @@ export function validDraft(value: unknown): value is CaptureDraft {
     && (draft.historyId === undefined || typeof draft.historyId === "string")
     && (draft.bodyEdited === undefined || typeof draft.bodyEdited === "boolean")
     && (draft.savedContentChanged === undefined || typeof draft.savedContentChanged === "boolean")
+    && (draft.saveMode === undefined || draft.saveMode === "manual" || draft.saveMode === "auto")
+    && (draft.rootDocumentId === undefined || typeof draft.rootDocumentId === "string")
+    && (draft.autoCreateIndex === undefined || typeof draft.autoCreateIndex === "boolean")
+    && (draft.indexDocumentId === undefined || typeof draft.indexDocumentId === "string")
+    && (draft.autoSave === undefined || (!!draft.autoSave && [draft.autoSave.rootId, draft.autoSave.documentId, draft.autoSave.sourceKey].every(item => typeof item === "string")))
+    && (draft.classification === undefined
+      || (typeof draft.classification === "object" && draft.classification !== null
+        && (draft.classification.categoryId === null || typeof draft.classification.categoryId === "string")
+        && typeof draft.classification.confidence === "number"
+        && typeof draft.classification.reason === "string"))
     && (!draft.editorState || [draft.editorState.markdown, draft.editorState.nativeMarkdown, draft.editorState.blockDOM].every(item => typeof item === "string"))
     && (!draft.editorState || draft.editorState.fullBlockDOM === undefined || typeof draft.editorState.fullBlockDOM === "string")
     && (draft.outputLanguage === undefined || ["follow_ui", "source", "zh-CN", "en-US"].includes(draft.outputLanguage))

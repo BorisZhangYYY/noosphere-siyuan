@@ -4,10 +4,10 @@ import type { Article, Settings } from "../types";
 import { buildReviewPrompt, parseReviewResult } from "./perspectives";
 import { imageReviewSettings, restoreImages, reviewImages, type ImageDecision, type ImageReviewResult } from "./images";
 import { modelEndpoint } from "./endpoint";
+import { headers } from "./provider-headers";
 import { ModelReviewStream } from "./stream";
 export { modelEndpoint } from "./endpoint";
 
-const ANTHROPIC_VERSION = "2023-06-01";
 const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
 
 export interface ArticleReviewResult { markdown: string; article: Article; summary: string; metadataAccepted: string[]; imageDecisions: ImageDecision[]; imagesReviewed: number; imageWarnings: string[] }
@@ -36,12 +36,6 @@ function reviewOutputTokens(markdown: string, settings: Settings): number {
 
 function errorText(result: ApiError): string {
   return typeof result.error === "string" ? result.error : result.error?.message || result.message || "模型未返回审阅内容";
-}
-
-function headers(settings: Settings): Record<string, string> {
-  if (settings.modelFormat === "anthropic") return { "x-api-key": settings.modelKey.trim(), "anthropic-version": ANTHROPIC_VERSION };
-  if (settings.modelFormat === "google") return { "x-goog-api-key": settings.modelKey.trim() };
-  return { Authorization: `Bearer ${settings.modelKey.trim()}` };
 }
 
 /** List models exposed by the configured provider, while retaining manual entry for proxy services. */
