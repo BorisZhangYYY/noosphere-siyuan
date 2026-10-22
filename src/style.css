@@ -300,4 +300,4 @@
 .noosphere__category-form .noosphere__category-actions button:first-child { margin-right:auto; }
 .noosphere__category-form .noosphere__category-status { margin-top:12px; }
 
-.noosphere .noosphere__category-location > label.noosphere__vision-option { margin-top:16px; }
+.noosphere .noosphere__category-location > label.noosphere__vision-option { margin-top:16px !important; }
