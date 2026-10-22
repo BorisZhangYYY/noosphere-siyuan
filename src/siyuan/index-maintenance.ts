@@ -15,9 +15,9 @@ export class CategoryIndexMaintenance {
   /** 内核命令覆盖侧栏操作、其他窗口与 API 写入，不依赖用户重新打开索引页。 */
   onMessage = (event: { detail?: { cmd?: string; data?: unknown } }): void => {
     const detail = event.detail;
-    // 分类标记的增删也会改变总览；普通正文和目录更新不触发自循环。
+    // 分类或索引身份改变时刷新父目录的标识；签名及正文更新不触发自循环。
     const categoryAttrs = ["transactions", "setAttrs"].includes(detail?.cmd || "")
-      && JSON.stringify(detail?.data || "").includes("custom-zl-category");
+      && [ "custom-zl-category", INDEX_ENABLED_ATTR ].some(name => JSON.stringify(detail?.data || "").includes(name));
     if (TREE_COMMANDS.has(detail?.cmd || "") || categoryAttrs) this.schedule();
   };
   schedule(): void {

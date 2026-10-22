@@ -9,7 +9,19 @@ interface ChildBlock { id: string; type: string; subType?: string; content?: str
 interface Operations { doOperations?: Array<{ id?: string; action?: string }> }
 export interface CategoryInput { name: string; description: string; parentId: string }
 const HELP_ATTR = "custom-zl-classification-help";
-const ROOT_HELP = "本页展示根目录下的完整文档树，包含分类、文章和普通文档，默认锁定；不推荐修改“目录”“说明”和各分类页的二级标题，以保持文档结构清晰。目录随文档新建、删除、改名和移动自动更新，点击目录项可打开文档。\n\n请从知流的“分类配置 → 分类管理”新增或编辑分类；分类描述应说明收录主题、典型内容和分类边界，可手动填写，也可先用 AI 生成再确认同步。你也可以在思源原生菜单中解锁分类文档，直接编辑分类描述所在位置，后续分类会读取最新描述；主动解锁后不会被再次强制锁定。文章文档始终可编辑。\n\n自动分类使用分类文档 ID、完整路径和描述区域的块标记，不依赖二级标题的文字。只改标题名称不会使分类失效；删除或重建描述标题可能丢失区域标记，可在分类管理中重新保存描述来修复。未找到明确匹配分类时，文章保存在分类根下。";
+// 每次调整指引递增版本；原生列表会插入块属性，不能用 Markdown 子串比较判定内容是否相同。
+const HELP_VERSION_ATTR = "custom-zl-help-version";
+const HELP_VERSION = "2";
+const ROOT_HELP = [
+  "**目录标识**：📚 加粗为索引页，📄 为内容页；点击标题打开。",
+  "**自动同步**：展示全部子文档，增删、改名和移动会自动更新。",
+  "**管理分类**：在“分类配置 → 分类管理”中新增分类、改名或选择父分类。",
+  "**填写描述**：写清收录主题和分类边界；AI 生成后可修改再同步。",
+  "**自动保存**：文章页选“自动分类”，审阅成功后保存；未匹配时存到根下。",
+  "**编辑内容**：索引页默认锁定，解锁后可改描述；内容页可直接编辑。",
+  "**维护标题**：建议保留二级标题；只改标题文字不会使分类失效。",
+  "**误删修复**：删除描述区域后，在分类管理中重新保存描述即可修复。",
+].map(item => `- ${item}`).join("\n");
 const serial = new Map<string, Promise<unknown>>();
 
 /** 防止当前前端的重复点击创建多个目录或同时覆盖同一描述。 */
@@ -103,19 +115,24 @@ export async function ensureClassificationRoot(rootId: string): Promise<string |
     const helpHeading = await section("custom-zl-root-help-heading", "说明", "分类使用说明");
     let help = children.find(child => child.id === attrs["custom-zl-root-help-block"]);
     if (!help) {
-      for (const child of children.filter(child => child.type === "p")) {
+      for (const child of children.filter(child => child.type === "p" || child.type === "l")) {
         const childAttrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: child.id });
         if (childAttrs[HELP_ATTR] === id) { help = child; break; }
       }
     }
-    const helpData = `${ROOT_HELP}\n{: ${HELP_ATTR}="${id}"}`;
+    const helpData = `${ROOT_HELP}\n{: ${HELP_ATTR}="${id}" ${HELP_VERSION_ATTR}="${HELP_VERSION}"}`;
     if (!help) {
-      // 一个受管段落承载说明，避免多段说明在后续同步时重复追加。
-      const result = await kernelPost<Operations[]>("/api/block/insertBlock", { previousID: helpHeading, dataType: "markdown", data: helpData.replace(/\n\n/g, "\n") });
-      help = { id: insertedId(result), type: "p" };
+      // 一份原生列表承载全部短指引，整体登记，迁移和反复同步均不追加重复说明。
+      const result = await kernelPost<Operations[]>("/api/block/insertBlock", { previousID: helpHeading, dataType: "markdown", data: helpData });
+      help = { id: insertedId(result), type: "l" };
+      await kernelPost("/api/attr/setBlockAttrs", { id: help.id, attrs: { [HELP_ATTR]: id, [HELP_VERSION_ATTR]: HELP_VERSION } });
     } else {
-      const previous = await kramdown(help.id);
-      if (!previous.includes(ROOT_HELP.replace(/\n\n/g, "\n"))) await kernelPost("/api/block/updateBlock", { id: help.id, dataType: "markdown", data: helpData.replace(/\n\n/g, "\n") });
+      const helpAttrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: help.id });
+      if (help.type !== "l" || helpAttrs[HELP_VERSION_ATTR] !== HELP_VERSION) {
+        const result = await kernelPost<Operations[]>("/api/block/updateBlock", { id: help.id, dataType: "markdown", data: helpData });
+        help = { id: insertedId(result), type: "l" };
+        await kernelPost("/api/attr/setBlockAttrs", { id: help.id, attrs: { [HELP_ATTR]: id, [HELP_VERSION_ATTR]: HELP_VERSION } });
+      }
     }
     await kernelPost("/api/attr/setBlockAttrs", { id, attrs: { [OVERVIEW_ROOT_ATTR]: id, "custom-zl-root-help-block": help.id } });
     const indexId = await refreshCategoryIndex(id, { create: true });

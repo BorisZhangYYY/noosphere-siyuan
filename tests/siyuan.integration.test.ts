@@ -136,8 +136,19 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     expect(rootMd).toContain('根文档中的用户说明必须保留'); expect(rootMd).toContain(ai); expect(rootMd).toContain(llm); expect(rootMd).toContain(sample);
     const depth = (id: string): number => rootMd.split('\n').find(line => line.includes(`((${id} '`))!.match(/^\s*/)![0].length;
     expect(depth(sample)).toBeGreaterThan(depth(llm)); expect(depth(llm)).toBeGreaterThan(depth(ai));
+    const referenceLine = (id: string): string => rootMd.split('\n').find(line => line.includes(`((${id} '`))!;
+    expect(referenceLine(ai)).toContain('📚'); expect(referenceLine(ai)).toContain('**');
+    expect(referenceLine(sample)).toContain('📄'); expect(referenceLine(sample)).not.toContain('**');
     expect(rootMd.indexOf('## 目录')).toBeLessThan(rootMd.indexOf('## 说明'));
     expect(rootMd).not.toContain('## 分类使用说明');
+    const rootAttrs = await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: rootId });
+    const help = rootAttrs['custom-zl-root-help-block'];
+    const helpItems = await kernelPost<Array<{ id: string; type: string }>>('/api/block/getChildBlocks', { id: help });
+    expect(helpItems).toHaveLength(8);
+    const helpMd = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: help })).kramdown;
+    expect(helpMd).toContain('**目录标识**'); expect(helpMd).toContain('**误删修复**');
+    await ensureClassificationRoot(rootId);
+    expect((await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: rootId }))['custom-zl-root-help-block']).toBe(help);
     const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: ai })).kramdown;
     expect(md).toContain('## 分类描述'); expect(md).toContain('custom-zl-description="true"'); expect(md).toContain('## 文章目录');
     expect((await discoverCategories(rootId)).map(node => node.path)).toEqual(['人工智能', '人工智能 / 大模型']);
@@ -209,7 +220,10 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
   }, 20000);
   it("migrates owned root sections and preserves their bindings after a rename", async () => {
     const id = await create('/旧版根结构', '保留用户正文。\n\n## 分类使用说明\n\n旧说明\n{: custom-zl-classification-help="PLACEHOLDER"}\n\n## 全部分类\n\n暂无分类。\n{: custom-zl-index="true"}');
-    await attrs(id, { 'custom-zl-overview-root': id });
+    const original = await kernelPost<Array<{ id: string; type: string; content?: string }>>('/api/block/getChildBlocks', { id });
+    const oldHelp = original.find(block => block.type === 'p' && block.content === '旧说明')!;
+    await attrs(id, { 'custom-zl-overview-root': id, 'custom-zl-root-help-block': oldHelp.id });
+    await attrs(oldHelp.id, { 'custom-zl-classification-help': id });
     await ensureClassificationRoot(id);
     const blocks = await kernelPost<Array<{ id: string; type: string; content?: string }>>('/api/block/getChildBlocks', { id });
     const heading = blocks.find(block => block.type === 'h' && block.content === '目录')!;
@@ -218,6 +232,12 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id })).kramdown;
     expect(md).toContain('保留用户正文'); expect(md).toContain('## 自定义导航');
     expect(md.match(/## 说明/g)).toHaveLength(1); expect(md).not.toContain('## 全部分类');
+    expect(md).not.toContain('旧说明'); expect(md.match(/\*\*目录标识\*\*/g)).toHaveLength(1);
+    const helpId = (await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id }))['custom-zl-root-help-block'];
+    const helpAttrs = await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: helpId });
+    expect(helpAttrs['custom-zl-classification-help']).toBe(id);
+    expect(helpAttrs['custom-zl-help-version']).toBe('2');
+    expect((await kernelPost<Array<{ id: string }>>('/api/block/getChildBlocks', { id: helpId })).length).toBe(8);
   });
   it("keeps all root descendants visible regardless of category markers and follows real tree changes", async () => {
     const rootId = await create('/标记变更根', '根说明');
@@ -234,9 +254,11 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
       await vi.waitFor(async () => expect(await content(), events.join(',')).toContain(doc), { timeout: 8000 });
       await attrs(doc, { 'custom-zl-category': 'true' });
       expect((await discoverCategories(rootId)).map(node => node.id)).toContain(doc);
+      await vi.waitFor(async () => expect((await content()).split('\n').find(line => line.includes(`((${doc} '`))).toContain('📚'), { timeout: 8000 });
       await attrs(doc, { 'custom-zl-category': '' });
       expect((await discoverCategories(rootId)).map(node => node.id)).not.toContain(doc);
       expect(await content()).toContain(doc);
+      await vi.waitFor(async () => expect((await content()).split('\n').find(line => line.includes(`((${doc} '`))).toContain('📄'), { timeout: 8000 });
       const child = await create('/标记变更根/自定义分类/未标记的中间层/普通文章', '普通文档也进入根目录');
       await vi.waitFor(async () => expect(await content()).toContain(child), { timeout: 8000 });
       expect(await content()).toContain('未标记的中间层');

@@ -19,6 +19,13 @@ it('ignores index block transactions to avoid refreshing itself forever', async 
   sync.onMessage({ detail: { cmd: 'transactions' } }); await vi.advanceTimersByTimeAsync(1000);
   expect(refreshCategoryIndex).not.toHaveBeenCalled(); sync.stop();
 });
+it('updates ancestor labels when a document becomes an index without reacting to signature writes', async () => {
+  const sync = new CategoryIndexMaintenance(() => ({ rootDocumentId: '', autoCreateIndex: false }), vi.fn());
+  sync.onMessage({ detail: { cmd: 'setAttrs', data: { attrs: { 'custom-zl-index-signature': 'next' } } } });
+  await vi.advanceTimersByTimeAsync(300); expect(refreshCategoryIndex).not.toHaveBeenCalled();
+  sync.onMessage({ detail: { cmd: 'setAttrs', data: { attrs: { 'custom-zl-index-enabled': 'true' } } } });
+  await vi.advanceTimersByTimeAsync(300); expect(refreshCategoryIndex).toHaveBeenCalledTimes(2); sync.stop();
+});
 it('removes pending work when the plugin unloads', async () => {
   const sync = new CategoryIndexMaintenance(() => ({ rootDocumentId: '', autoCreateIndex: false }), vi.fn());
   sync.schedule(); sync.stop(); await vi.advanceTimersByTimeAsync(1000); expect(kernelPost).not.toHaveBeenCalled();

@@ -222,10 +222,25 @@ describe("managed category indexes", () => {
   it("escapes article titles in block links", () => {
     expect(renderCategoryIndex([{ id: ai, title: '<A> & \"B\"' }])).toContain('&lt;A&gt; &amp; &quot;B&quot;');
   });
+  it("distinguishes an empty marked index from an ordinary content document that has children", async () => {
+    override = (path, payload) => {
+      if (path === '/api/query/sql') return payload.stmt.startsWith('SELECT id, root_id')
+        ? [{ id: llm, type: 'd', ial: '{: custom-zl-category="true"}' }, { id: saved, type: 'd', ial: '{: not-custom-zl-category="true"}' }]
+        : [marker];
+      if (path === '/api/filetree/listDocsByPath') return payload.path === locations[ai].path
+        ? { files: [{ id: llm, name: '空索引', path: locations[llm].path, subFileCount: 0 }, { id: saved, name: '带子文档的文章', path: locations[saved].path, subFileCount: 1 }] }
+        : { files: [{ id: outside, name: '附录', path: locations[saved].path.replace(/\.sy$/, '') + '/' + outside + '.sy', subFileCount: 0 }] };
+    };
+    await refreshCategoryIndex(ai);
+    const data = (calls().find(([path]) => path === '/api/block/updateBlock')![1] as any).data;
+    expect(data).toContain(`📚 <span data-type="block-ref strong" data-id="${llm}" data-subtype="d">空索引</span>`);
+    expect(data).toContain(`📄 <span data-type="block-ref" data-id="${saved}"`);
+    expect(data).toContain(`📄 <span data-type="block-ref" data-id="${outside}"`);
+  });
   it("uses the file tree API and rewrites only a marked content block", async () => {
     override = path => path === '/api/query/sql' ? [marker] : undefined;
     expect(await refreshCategoryIndex(ai)).toBe(index);
-    expect(calls().find(([p]) => p === '/api/block/updateBlock')![1]).toEqual({ id: index, dataType: 'markdown', data: `* <span data-type="block-ref" data-id="${saved}" data-subtype="d">文章标题</span>` });
+    expect(calls().find(([p]) => p === '/api/block/updateBlock')![1]).toEqual({ id: index, dataType: 'markdown', data: `* 📄 <span data-type="block-ref" data-id="${saved}" data-subtype="d">文章标题</span>` });
     expect(calls().some(([p]) => p === '/api/block/getChildBlocks')).toBe(false);
   });
   it("does not create a directory without opt-in", async () => {
@@ -261,7 +276,7 @@ describe("managed category indexes", () => {
     await refreshCategoryIndex(ai);
     const data = (calls().find(([p]) => p === '/api/block/updateBlock')![1] as any).data;
     expect(data).toContain(`data-id="${llm}"`);
-    expect(data).toContain(`\n    * <span data-type="block-ref" data-id="${saved}"`);
+    expect(data).toContain(`\n    * 📄 <span data-type="block-ref" data-id="${saved}"`);
   });
   it("replaces a category-only notebook root index with the full ordered document tree", async () => {
     override = (path, payload) => {
@@ -283,7 +298,7 @@ describe("managed category indexes", () => {
     };
     await refreshCategoryIndex(box);
     const data = (calls().find(([path]) => path === '/api/block/updateBlock')![1] as any).data;
-    expect(data).toBe(`* <span data-type="block-ref" data-id="${ai}" data-subtype="d">AI</span>\n    * <span data-type="block-ref" data-id="${saved}" data-subtype="d">未标记的文章</span>\n* <span data-type="block-ref" data-id="${outside}" data-subtype="d">普通说明</span>`);
+    expect(data).toBe(`* 📄 <span data-type="block-ref" data-id="${ai}" data-subtype="d">AI</span>\n    * 📄 <span data-type="block-ref" data-id="${saved}" data-subtype="d">未标记的文章</span>\n* 📄 <span data-type="block-ref" data-id="${outside}" data-subtype="d">普通说明</span>`);
     expect(calls().some(([path]) => path === '/api/block/getBlockKramdown')).toBe(false);
   });
   it("recreates a removed managed index from the page's persistent opt-in", async () => {

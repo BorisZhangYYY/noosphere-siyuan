@@ -57,17 +57,31 @@ export function classificationCandidates(nodes: CategoryNode[]): Array<{ id: str
   return nodes.filter(node => node.name && node.id).map(node => ({ id: node.id, path: node.path || node.name, description: node.description }));
 }
 
-export interface CategoryIndexItem { id: string; title: string; children?: CategoryIndexItem[] }
-/** 原生动态块引用与目录插件一致；链接文字不再是可单独编辑的普通超链接。 */
+export interface CategoryIndexItem { id: string; title: string; isIndex?: boolean; children?: CategoryIndexItem[] }
+/** 索引页加粗并标为书册，内容页标为单页；标题仍使用原生动态块引用。 */
 export function renderCategoryIndex(items: CategoryIndexItem[], depth = 0): string {
   const html = (text: string): string => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  return items.filter(item => SIYUAN_ID.test(item.id) && item.title).map(item =>
-    `${"    ".repeat(depth)}* <span data-type="block-ref" data-id="${item.id}" data-subtype="d">${html(item.title)}</span>`
-    + (item.children?.length ? `\n${renderCategoryIndex(item.children, depth + 1)}` : "")).join("\n");
+  return items.filter(item => SIYUAN_ID.test(item.id) && item.title).map(item => {
+    // 加粗作为原生文本标记与引用共存，避免 HTML strong 包裹时丢失动态引用。
+    const reference = `<span data-type="${item.isIndex ? "block-ref strong" : "block-ref"}" data-id="${item.id}" data-subtype="d">${html(item.title)}</span>`;
+    return `${"    ".repeat(depth)}* ${item.isIndex ? "📚" : "📄"} ${reference}`
+      + (item.children?.length ? `\n${renderCategoryIndex(item.children, depth + 1)}` : "");
+  }).join("\n");
+}
+
+/** 批量读取稳定标记，普通文章即使有子文档也不会因此被误认成索引页。 */
+async function indexDocuments(root: DocumentLocation): Promise<Set<string>> {
+  const rows = await kernelPost<Array<{ id: string; root_id: string; type: string; ial: string }>>("/api/query/sql", {
+    stmt: `SELECT id, root_id, type, ial FROM blocks WHERE ${rootCondition(root)} AND ((type = 'd' AND (ial LIKE '%${CATEGORY_ATTR}%' OR ial LIKE '%${INDEX_ENABLED_ATTR}%' OR ial LIKE '%${OVERVIEW_ROOT_ATTR}%')) OR (type != 'd' AND ial LIKE '%${INDEX_ATTR}%')) LIMIT 2147483647`,
+  });
+  return new Set(rows.filter(row => row.type === "d"
+    ? !!attrFromIal(row.ial, CATEGORY_ATTR) || attrFromIal(row.ial, INDEX_ENABLED_ATTR) === "true" || !!attrFromIal(row.ial, OVERVIEW_ROOT_ATTR)
+    : !!attrFromIal(row.ial, INDEX_ATTR))
+    .map(row => row.type === "d" ? row.id : row.root_id).filter(id => SIYUAN_ID.test(id)));
 }
 
 /** 沿思源真实文档树递归，保留目录排序、全部层级，并拒绝重复节点。 */
-async function indexItems(location: DocumentLocation, visited = new Set<string>()): Promise<CategoryIndexItem[]> {
+async function indexItems(location: DocumentLocation, indexes: Set<string>, visited = new Set<string>()): Promise<CategoryIndexItem[]> {
   if (visited.has(location.id)) return [];
   visited.add(location.id);
   const result = await kernelPost<{ files: Array<{ id: string; name: string; path?: string; subFileCount?: number }> }>("/api/filetree/listDocsByPath", {
@@ -79,8 +93,8 @@ async function indexItems(location: DocumentLocation, visited = new Set<string>(
     const parentPath = location.isNotebook ? "" : location.path.replace(/\.sy$/, "");
     const childPath = child.path || `${parentPath}/${child.id}.sy`;
     if (!withinRoot({ notebook: location.notebook, path: childPath }, location)) continue;
-    items.push({ id: child.id, title: child.name.replace(/\.sy$/, ""), children: (child.subFileCount ?? 0) > 0
-      ? await indexItems({ ...location, id: child.id, path: childPath, isNotebook: false }, visited) : [] });
+    items.push({ id: child.id, title: child.name.replace(/\.sy$/, ""), isIndex: indexes.has(child.id), children: (child.subFileCount ?? 0) > 0
+      ? await indexItems({ ...location, id: child.id, path: childPath, isNotebook: false }, indexes, visited) : [] });
   }
   return items;
 }
@@ -116,7 +130,7 @@ async function updateCategoryIndex(categoryDocId: string, create: boolean): Prom
   // 根目录与分类页都展示真实的完整文档树；分类候选仍由 discoverCategories 独立筛选。
   // 保留旧根绑定的读取，兼容已有受管目录，刷新时直接替换原目录块。
   const location = await locateDocument(attrs[OVERVIEW_ROOT_ATTR] || categoryDocId);
-  const items = await indexItems(location);
+  const items = await indexItems(location, await indexDocuments(location));
   const emptyText = "暂无子文档。";
   const data = renderCategoryIndex(items) || emptyText;
   const signature = indexSignature(items);
