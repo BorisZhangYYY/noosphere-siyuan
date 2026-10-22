@@ -341,13 +341,12 @@ export default class NoospherePlugin extends Plugin {
       auto.checked = mode === "auto";
       renderSaveMode();
     };
-    /** 自动分类只展示全局配置，文章页不能修改根目录。 */
+    /** 自动分类的根目录仅在分类配置管理，文章页隐藏位置字段。 */
     const renderSaveMode = (): void => {
       const auto = saveMode() === "auto";
       const find = (name: string): HTMLElement | null => root.querySelector<HTMLElement>(`[data-role="${name}"]`);
       (find("targetField") as HTMLElement).hidden = auto;
-      (find("rootSummaryField") as HTMLElement).hidden = !auto;
-      (find("rootSummary") as HTMLElement).textContent = this.settings.rootDocumentId || "未设置";
+      target.readOnly = auto;
       action("retryIndex").hidden = !indexDocumentId;
     };
     const sourceAuthor = field<HTMLInputElement>("sourceAuthor");

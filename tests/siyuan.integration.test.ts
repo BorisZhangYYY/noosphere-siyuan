@@ -236,7 +236,7 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     const helpId = (await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id }))['custom-zl-root-help-block'];
     const helpAttrs = await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: helpId });
     expect(helpAttrs['custom-zl-classification-help']).toBe(id);
-    expect(helpAttrs['custom-zl-help-version']).toBe('2');
+    expect(helpAttrs['custom-zl-help-version']).toBe('3');
     expect((await kernelPost<Array<{ id: string }>>('/api/block/getChildBlocks', { id: helpId })).length).toBe(8);
   });
   it("keeps all root descendants visible regardless of category markers and follows real tree changes", async () => {

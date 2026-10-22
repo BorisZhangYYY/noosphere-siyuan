@@ -20,15 +20,21 @@ it("does not mistake fenced headings or an intentionally empty description for o
   expect(readCategoryDescription('```md\n## 分类描述\n错误区域\n```\n\n## 分类描述\n\n真正的描述\n\n## 目录')).toBe('真正的描述');
   expect(readCategoryDescription('## 分类描述\n\n## 目录', '过期描述')).toBe('');
 });
-it("generates editable text with existing classification boundaries and makes no document write", async () => {
-  vi.mocked(requestShortText).mockResolvedValue('收集大型语言模型的训练、推理与 RAG；其他 AI 应用优先放到人工智能。');
-  const result = await generateCategoryDescription('大模型', '人工智能', [{ id: 'id', name: '游戏', path: '游戏', description: '游戏机制', parentId: 'root' }], DEFAULT_SETTINGS);
-  expect(result).toContain('RAG');
-  expect(vi.mocked(requestShortText).mock.calls[0][2]).toContain('游戏机制');
+it("uses only the current category context and requests a focused, editable description", async () => {
+  const text = '收集大型语言模型的训练、推理与 RAG，包含模型评测、技术实践和应用案例。';
+  vi.mocked(requestShortText).mockResolvedValue(text);
+  const controller = new AbortController();
+  expect(await generateCategoryDescription(' 大模型 ', ' 人工智能 ', DEFAULT_SETTINGS, controller.signal)).toBe(text);
+  const [settings, prompt, input, signal] = vi.mocked(requestShortText).mock.calls[0];
+  expect(settings).toBe(DEFAULT_SETTINGS); expect(signal).toBe(controller.signal);
+  expect(JSON.parse(input)).toEqual({ name: '大模型', parent: '人工智能' });
+  expect(prompt).toContain('正向说明当前分类适合收录的主题、内容范围和典型文章');
+  expect(prompt).toContain('不比较相邻分类');
+  expect(prompt).toContain('不写排除条款');
 });
 it("requires a name and reports unusable model output", async () => {
-  await expect(generateCategoryDescription('', '根', [], DEFAULT_SETTINGS)).rejects.toThrow('名称');
+  await expect(generateCategoryDescription('', '根', DEFAULT_SETTINGS)).rejects.toThrow('名称');
   expect(requestShortText).not.toHaveBeenCalled();
   vi.mocked(requestShortText).mockResolvedValue('');
-  await expect(generateCategoryDescription('AI', '根', [], DEFAULT_SETTINGS)).rejects.toThrow('为空');
+  await expect(generateCategoryDescription('AI', '根', DEFAULT_SETTINGS)).rejects.toThrow('为空');
 });

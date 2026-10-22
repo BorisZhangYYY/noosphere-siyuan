@@ -1031,10 +1031,17 @@ describe("workbench regression", () => {
   }
   it("switches back to manual mode with mutually exclusive radio controls", async () => {
     await launch(); await chooseAuto();
+    const target = document.querySelector<HTMLInputElement>('[data-field="targetDocumentId"]')!;
+    expect(target.readOnly).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-role="targetField"]')!.hidden).toBe(true);
+    const saveArea = document.querySelector('[aria-label="保存位置"]')!;
+    expect(saveArea.querySelector('[data-role="rootSummary"]')).toBeNull();
+    expect(saveArea.querySelector('[data-field="rootDocumentId"]')).toBeNull();
+    expect(saveArea.textContent).not.toContain('分类根目录');
     const auto = document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="auto"]')!;
     document.querySelector<HTMLInputElement>('input[data-field="saveMode"][value="manual"]')!.click();
     expect(auto.checked).toBe(false);
-    expect(document.querySelector<HTMLElement>('[data-role="rootSummaryField"]')!.hidden).toBe(true);
+    expect(target.readOnly).toBe(false);
     expect(document.querySelector<HTMLElement>('[data-role="targetField"]')!.hidden).toBe(false);
   });
   it("keeps the manual duplicate-save guard after toggling modes", async () => {
@@ -1049,7 +1056,7 @@ describe("workbench regression", () => {
     document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.click();
     click("saveClassification"); await ready(); click("showCapture");
     expect(document.querySelector('[data-view="setup"] [data-field="rootDocumentId"]')).toBeNull();
-    expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("20260101000000-aaaaaaa");
+    expect(document.querySelector('[aria-label="保存位置"]')!.textContent).not.toContain("20260101000000-aaaaaaa");
     fixtures.dialogs.at(-1)!.destroy();
     await vi.waitFor(() => expect(stored()).not.toHaveProperty("rootDocumentId"));
     expect(stored()).not.toHaveProperty("autoCreateIndex");
@@ -1070,7 +1077,7 @@ describe("workbench regression", () => {
     await launch(); click("showHistory"); historyAction("view");
     expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.value).toBe("20260101000000-aaaaaaa");
     expect(document.querySelector<HTMLInputElement>('[data-field="autoCreateIndex"]')!.checked).toBe(true);
-    expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("20260101000000-aaaaaaa");
+    expect(document.querySelector('[aria-label="保存位置"]')!.textContent).not.toContain("20260101000000-aaaaaaa");
     click("toggleSettings"); click("settings"); await ready();
     expect(fixtures.files.get("settings.json")).toMatchObject({ rootDocumentId: "20260101000000-aaaaaaa", autoCreateIndex: true });
   });
@@ -1084,7 +1091,7 @@ describe("workbench regression", () => {
     plugin.onunload(); fixtures.files.set(DRAFT_STORAGE_NAME, legacyDraft());
     await launch();
     expect(document.querySelector<HTMLInputElement>('[data-field="rootDocumentId"]')!.value).toBe("");
-    expect(document.querySelector('[data-role="rootSummary"]')!.textContent).toBe("未设置");
+    expect(document.querySelector('[data-role="rootSummary"]')).toBeNull();
   });
   it("prefers an existing global root during the one-time legacy migration", async () => {
     const { classificationSettingsVersion: _version, ...legacySettings } = DEFAULT_SETTINGS;

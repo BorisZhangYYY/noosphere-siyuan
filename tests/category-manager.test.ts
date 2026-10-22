@@ -33,12 +33,12 @@ beforeEach(() => {
 });
 afterEach(() => manager?.dispose());
 it('previews generated text and creates a document only after confirmation', async () => {
-  vi.mocked(generateCategoryDescription).mockResolvedValue('小说与文学叙事，不包括游戏设计。');
+  vi.mocked(generateCategoryDescription).mockResolvedValue('收集小说创作、文学叙事与作品赏析。');
   await launch(); click('new'); field<HTMLInputElement>('name').value = '小说'; click('generate'); await ready();
   expect(field<HTMLTextAreaElement>('description').value).toContain('文学叙事'); expect(createCategory).not.toHaveBeenCalled();
   expect(field('editorStatus').textContent).toContain('尚未保存');
   click('save'); await ready();
-  expect(createCategory).toHaveBeenCalledWith(root, { name: '小说', description: '小说与文学叙事，不包括游戏设计。', parentId: root }, expect.any(Function));
+  expect(createCategory).toHaveBeenCalledWith(root, { name: '小说', description: '收集小说创作、文学叙事与作品赏析。', parentId: root }, expect.any(Function));
   expect(field('status').textContent).toContain('已同步');
 });
 it('edits the selected category without creating another document', async () => {
@@ -59,7 +59,7 @@ it('retries synchronization of a partially created category instead of creating 
 });
 it('cancels model generation when closed without creating a document', async () => {
   let signal: AbortSignal | undefined;
-  vi.mocked(generateCategoryDescription).mockImplementation(async (_name, _parent, _categories, _settings, current) => { signal = current; return new Promise(() => undefined); });
+  vi.mocked(generateCategoryDescription).mockImplementation(async (_name, _parent, _settings, current) => { signal = current; return new Promise(() => undefined); });
   await launch(); click('new'); field<HTMLInputElement>('name').value = 'AI'; click('generate');
   await vi.waitFor(() => expect(signal).toBeDefined()); manager.dispose();
   expect(signal?.aborted).toBe(true); expect(createCategory).not.toHaveBeenCalled();

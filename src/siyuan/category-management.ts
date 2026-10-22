@@ -11,12 +11,12 @@ export interface CategoryInput { name: string; description: string; parentId: st
 const HELP_ATTR = "custom-zl-classification-help";
 // 每次调整指引递增版本；原生列表会插入块属性，不能用 Markdown 子串比较判定内容是否相同。
 const HELP_VERSION_ATTR = "custom-zl-help-version";
-const HELP_VERSION = "2";
+const HELP_VERSION = "3";
 const ROOT_HELP = [
   "**目录标识**：📚 加粗为索引页，📄 为内容页；点击标题打开。",
   "**自动同步**：展示全部子文档，增删、改名和移动会自动更新。",
   "**管理分类**：在“分类配置 → 分类管理”中新增分类、改名或选择父分类。",
-  "**填写描述**：写清收录主题和分类边界；AI 生成后可修改再同步。",
+  "**填写描述**：写清本类主题和典型内容；AI 生成后可修改再同步。",
   "**自动保存**：文章页选“自动分类”，审阅成功后保存；未匹配时存到根下。",
   "**编辑内容**：索引页默认锁定，解锁后可改描述；内容页可直接编辑。",
   "**维护标题**：建议保留二级标题；只改标题文字不会使分类失效。",
