@@ -133,7 +133,9 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     const sample = await create('/分类管理根/人工智能/大模型/样文', '文章可编辑');
     expect(await ensureClassificationRoot(rootId)).toBe(rootId);
     const rootMd = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: rootId })).kramdown;
-    expect(rootMd).toContain('根文档中的用户说明必须保留'); expect(rootMd).toContain(ai); expect(rootMd).toContain(llm); expect(rootMd).not.toContain(sample);
+    expect(rootMd).toContain('根文档中的用户说明必须保留'); expect(rootMd).toContain(ai); expect(rootMd).toContain(llm); expect(rootMd).toContain(sample);
+    const depth = (id: string): number => rootMd.split('\n').find(line => line.includes(`((${id} '`))!.match(/^\s*/)![0].length;
+    expect(depth(sample)).toBeGreaterThan(depth(llm)); expect(depth(llm)).toBeGreaterThan(depth(ai));
     expect(rootMd.indexOf('## 目录')).toBeLessThan(rootMd.indexOf('## 说明'));
     expect(rootMd).not.toContain('## 分类使用说明');
     const md = (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: ai })).kramdown;
@@ -191,7 +193,7 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     const content = async (): Promise<string> => (await kernelPost<{ kramdown: string }>('/api/block/getBlockKramdown', { id: notebook })).kramdown;
     const md = await content();
     expect(md).toContain('笔记本中的用户说明必须保留');
-    expect(md).toContain(top); expect(md).toContain(nested); expect(md).not.toContain(saved.documentId);
+    expect(md).toContain(top); expect(md).toContain(nested); expect(md).toContain(saved.documentId); expect(md).toContain(existing);
     expect(md.indexOf('## 目录')).toBeLessThan(md.indexOf('## 说明'));
     expect(md.match(/## 目录/g)).toHaveLength(1); expect(md.match(/## 说明/g)).toHaveLength(1);
     expect((await kernelPost<Record<string, string>>('/api/attr/getBlockAttrs', { id: notebook }))['custom-sy-readonly']).toBe('true');
@@ -217,7 +219,7 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     expect(md).toContain('保留用户正文'); expect(md).toContain('## 自定义导航');
     expect(md.match(/## 说明/g)).toHaveLength(1); expect(md).not.toContain('## 全部分类');
   });
-  it("updates the category overview when a category marker is added or removed", async () => {
+  it("keeps all root descendants visible regardless of category markers and follows real tree changes", async () => {
     const rootId = await create('/标记变更根', '根说明');
     await ensureClassificationRoot(rootId);
     const sync = new CategoryIndexMaintenance(() => ({ rootDocumentId: rootId, autoCreateIndex: false }), error => errors.push(error));
@@ -229,10 +231,23 @@ describe.skipIf(!base || !token)("isolated SiYuan kernel", () => {
     try {
       await new Promise<void>((resolve, reject) => { socket.addEventListener('open', () => resolve(), { once: true }); socket.addEventListener('error', () => reject(new Error('WebSocket 连接失败')), { once: true }); });
       const doc = await create('/标记变更根/自定义分类', '用户手动建立的分类');
-      await attrs(doc, { 'custom-zl-category': 'true' });
       await vi.waitFor(async () => expect(await content(), events.join(',')).toContain(doc), { timeout: 8000 });
+      await attrs(doc, { 'custom-zl-category': 'true' });
+      expect((await discoverCategories(rootId)).map(node => node.id)).toContain(doc);
       await attrs(doc, { 'custom-zl-category': '' });
-      await vi.waitFor(async () => expect(await content(), events.join(',')).not.toContain(doc), { timeout: 8000 });
+      expect((await discoverCategories(rootId)).map(node => node.id)).not.toContain(doc);
+      expect(await content()).toContain(doc);
+      const child = await create('/标记变更根/自定义分类/未标记的中间层/普通文章', '普通文档也进入根目录');
+      await vi.waitFor(async () => expect(await content()).toContain(child), { timeout: 8000 });
+      expect(await content()).toContain('未标记的中间层');
+      await kernelPost('/api/filetree/renameDocByID', { id: child, title: '普通文章改名' });
+      await vi.waitFor(async () => expect(await content()).toContain('普通文章改名'), { timeout: 8000 });
+      await kernelPost('/api/filetree/moveDocsByID', { fromIDs: [doc], toID: outside });
+      await vi.waitFor(async () => { expect(await content()).not.toContain(doc); expect(await content()).not.toContain(child); }, { timeout: 8000 });
+      await kernelPost('/api/filetree/moveDocsByID', { fromIDs: [doc], toID: rootId });
+      await vi.waitFor(async () => expect(await content()).toContain(child), { timeout: 8000 });
+      await kernelPost('/api/filetree/removeDocByID', { id: doc });
+      await vi.waitFor(async () => expect(await content()).not.toContain(doc), { timeout: 8000 });
       expect(errors).toEqual([]);
     } finally { sync.stop(); socket.close(); }
   }, 30000);

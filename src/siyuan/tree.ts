@@ -58,19 +58,6 @@ export function classificationCandidates(nodes: CategoryNode[]): Array<{ id: str
 }
 
 export interface CategoryIndexItem { id: string; title: string; children?: CategoryIndexItem[] }
-/** 总览只收录标记为分类的文档，未标记的中间层保留在显示路径里。 */
-export function classificationIndexItems(categories: CategoryNode[]): CategoryIndexItem[] {
-  const items = new Map(categories.map(node => [node.id, { id: node.id, title: node.path || node.name, children: [] as CategoryIndexItem[] }]));
-  const roots: CategoryIndexItem[] = [];
-  for (const node of categories) {
-    const parent = categories.filter(other => other.id !== node.id && node.path.startsWith(other.path + " / "))
-      .sort((a, b) => b.path.length - a.path.length)[0];
-    const item = items.get(node.id)!;
-    if (parent) { item.title = node.path.slice(parent.path.length + 3); items.get(parent.id)!.children.push(item); }
-    else roots.push(item);
-  }
-  return roots;
-}
 /** 原生动态块引用与目录插件一致；链接文字不再是可单独编辑的普通超链接。 */
 export function renderCategoryIndex(items: CategoryIndexItem[], depth = 0): string {
   const html = (text: string): string => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -89,10 +76,11 @@ async function indexItems(location: DocumentLocation, visited = new Set<string>(
   const items: CategoryIndexItem[] = [];
   for (const child of result.files) {
     if (!SIYUAN_ID.test(child.id) || visited.has(child.id)) continue;
-    const childPath = child.path || `${location.path.replace(/\.sy$/, "")}/${child.id}.sy`;
+    const parentPath = location.isNotebook ? "" : location.path.replace(/\.sy$/, "");
+    const childPath = child.path || `${parentPath}/${child.id}.sy`;
     if (!withinRoot({ notebook: location.notebook, path: childPath }, location)) continue;
     items.push({ id: child.id, title: child.name.replace(/\.sy$/, ""), children: (child.subFileCount ?? 0) > 0
-      ? await indexItems({ ...location, id: child.id, path: childPath }, visited) : [] });
+      ? await indexItems({ ...location, id: child.id, path: childPath, isNotebook: false }, visited) : [] });
   }
   return items;
 }
@@ -125,10 +113,11 @@ async function updateCategoryIndex(categoryDocId: string, create: boolean): Prom
   const block = rows.find(row => attrFromIal(row.ial, INDEX_ATTR));
   const attrs = await kernelPost<Record<string, string>>("/api/attr/getBlockAttrs", { id: categoryDocId });
   if (!block && !create && attrs[INDEX_ENABLED_ATTR] !== "true") return null;
-  const location = await locateDocument(categoryDocId);
-  const overviewRoot = attrs[OVERVIEW_ROOT_ATTR];
-  const items = overviewRoot ? classificationIndexItems(await discoverCategories(overviewRoot)) : await indexItems(location);
-  const emptyText = overviewRoot ? "暂无分类。请在知流的分类管理中新增分类。" : "暂无子文档。";
+  // 根目录与分类页都展示真实的完整文档树；分类候选仍由 discoverCategories 独立筛选。
+  // 保留旧根绑定的读取，兼容已有受管目录，刷新时直接替换原目录块。
+  const location = await locateDocument(attrs[OVERVIEW_ROOT_ATTR] || categoryDocId);
+  const items = await indexItems(location);
+  const emptyText = "暂无子文档。";
   const data = renderCategoryIndex(items) || emptyText;
   const signature = indexSignature(items);
   const docAttrs: Record<string, string> = {};

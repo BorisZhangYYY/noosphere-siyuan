@@ -263,6 +263,29 @@ describe("managed category indexes", () => {
     expect(data).toContain(`data-id="${llm}"`);
     expect(data).toContain(`\n    * <span data-type="block-ref" data-id="${saved}"`);
   });
+  it("replaces a category-only notebook root index with the full ordered document tree", async () => {
+    override = (path, payload) => {
+      if (path === '/api/query/sql') return [marker];
+      if (path === '/api/attr/getBlockAttrs') return { type: 'doc', 'custom-zl-overview-root': box };
+      if (path === '/api/filetree/listDocsByPath') {
+        if (payload.path === '/') return { files: [
+          { id: box, name: '笔记本自身', subFileCount: 1 },
+          { id: ai, name: 'AI', subFileCount: 1 },
+          { id: outside, name: '普通说明', subFileCount: 0 },
+          { id: ai, name: '重复节点', subFileCount: 1 },
+        ] };
+        expect(payload.path).toBe(`/${ai}.sy`);
+        return { files: [
+          { id: saved, name: '未标记的文章', path: `/${ai}/${saved}.sy`, subFileCount: 0 },
+          { id: llm, name: '越界节点', path: `/${outside}/${llm}.sy`, subFileCount: 0 },
+        ] };
+      }
+    };
+    await refreshCategoryIndex(box);
+    const data = (calls().find(([path]) => path === '/api/block/updateBlock')![1] as any).data;
+    expect(data).toBe(`* <span data-type="block-ref" data-id="${ai}" data-subtype="d">AI</span>\n    * <span data-type="block-ref" data-id="${saved}" data-subtype="d">未标记的文章</span>\n* <span data-type="block-ref" data-id="${outside}" data-subtype="d">普通说明</span>`);
+    expect(calls().some(([path]) => path === '/api/block/getBlockKramdown')).toBe(false);
+  });
   it("recreates a removed managed index from the page's persistent opt-in", async () => {
     override = path => path === '/api/attr/getBlockAttrs' ? { type: 'doc', 'custom-zl-index-enabled': 'true' } : undefined;
     expect(await refreshCategoryIndex(ai)).toBe(index);
