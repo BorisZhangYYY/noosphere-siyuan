@@ -2,7 +2,7 @@
 import { Dialog, Plugin, confirm, openTab, showMessage } from "siyuan";
 import { scrapeWithFirecrawl } from "./crawler/firecrawl";
 import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
-import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, type ImageDecision, type ImageReviewResult } from "./review/images";
+import { applyImageDecisions, imageDecisionStatus, imageInventory, localizeImagePreviews, normalizeImageDecisions, syncEditedImages, type ImageDecision, type ImageReviewResult } from "./review/images";
 import { localizeMarkdownImages, replaceImageAssetRefs } from "./images/localize";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
 import { configuredProfiles, isCustomProvider, moveProvider, orderedProviderIds, presetProfile, providerInfo, providerMark, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
@@ -27,7 +27,7 @@ import { ReviewTextPlayback, reviewPlaybackContent } from "./review/playback";
 import { StreamFollowScroll } from "./review/follow";
 import { normalizeOutputLanguage } from "./review/language";
 import { previewUrl, renderStreamingArticlePreview, reviewPreviewText, type MarkdownRenderer } from "./article/preview";
-import { NativeArticleEditor, localizeEditorState, applyEditorImageChoices } from "./article/editor";
+import { NativeArticleEditor, articleImageHTML, localizeEditorState, applyEditorImageChoices } from "./article/editor";
 import { sourcePlatform } from "./article/source";
 import { stripSourceMetadata } from "./article/compose";
 import { articleTime, restoreArticleTime } from "./article/time";
@@ -510,13 +510,10 @@ export default class NoospherePlugin extends Plugin {
       article = { ...article, title: title || article.title };
       bodyEdited = true;
       reviewedMarkdown = state.markdown;
-      const previous = imageDecisions;
-      imageDecisions = imageInventory(state.markdown, article.url).map(item => {
-        const known = previous.find(old => old.url === item.url || old.previewUrl === item.url);
-        return known ? { ...known, ...item, description: known.description, recommendedRemove: known.recommendedRemove,
-          remove: known.remove, status: known.status, error: known.error } : item;
-      });
+      imageDecisions = syncEditedImages(state.markdown, article.url, imageDecisions);
+      if (selectedImage) selectedImage = imageDecisions.find(item => item.url === selectedImage?.url);
       markUnsaved(); persistDraft(); renderImageDecisions(); updateActions();
+      renderSelectedImage();
       meta.textContent = article.title; meta.title = article.title;
     };
     disposeArticleEditor = (): void => {
@@ -590,7 +587,8 @@ export default class NoospherePlugin extends Plugin {
       action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim()
         || (autoMode ? !this.settings.rootDocumentId.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("retryIndex").disabled = busy || !indexDocumentId;
-      action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
+      action("toggleImage").disabled = busy || (selectedImage?.unplaced ? !bodyEditing : bodyEditing || savedToTarget());
+      imageDecisionList.querySelectorAll<HTMLButtonElement>("button[data-image-full]").forEach(button => { button.draggable = bodyEditing && !busy; });
       for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
       action("openClassificationRoot").disabled = busy || savingSettings || openingClassificationRoot || !rootDocument.value.trim();
@@ -598,7 +596,7 @@ export default class NoospherePlugin extends Plugin {
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       role("providerList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       root.querySelectorAll<HTMLButtonElement>("[data-select-trigger], [data-select-option], [data-reveal]").forEach(button => { button.disabled = busy; });
-      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || (savedToTarget() && !!input.closest(".noosphere__asset")); });
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || ((bodyEditing || savedToTarget()) && !!input.closest(".noosphere__asset")); });
       for (const sourceField of [sourceAuthor, sourcePublished]) { sourceField.disabled = busy || !article || !sourceEditing; sourceField.hidden = !sourceEditing; }
       role("sourceAuthorText").hidden = sourceEditing; role("sourcePublishedText").hidden = sourceEditing;
       action("editSource").hidden = sourceEditing; action("confirmSource").hidden = !sourceEditing;
@@ -745,7 +743,7 @@ export default class NoospherePlugin extends Plugin {
       lightbox.hidden = !selectedImage;
       if (!selectedImage || !article) return;
       role("imageTitle").textContent = selectedImage.alt || "文章图片";
-      role("imageDescription").textContent = selectedImage.error || selectedImage.description;
+      role("imageDescription").textContent = selectedImage.unplaced ? "原图已保留，正文位置待确认。进入正文编辑后，可将素材拖到目标位置，或在正文放置光标后插入。" : selectedImage.error || selectedImage.description;
       const url = previewUrl(selectedImage.previewUrl || selectedImage.url, article.url, true);
       const image = role("imageLarge") as HTMLImageElement;
       image.alt = selectedImage.alt || "文章图片";
@@ -756,7 +754,8 @@ export default class NoospherePlugin extends Plugin {
       const source = previewUrl(selectedImage.url, article.url, true);
       link.hidden = !source;
       if (source) link.href = source;
-      action("toggleImage").textContent = selectedImage.unplaced ? "插入正文末尾" : selectedImage.remove ? "恢复图片" : "移除图片";
+      action("toggleImage").textContent = selectedImage.unplaced ? "插入光标位置" : selectedImage.remove ? "恢复图片" : "移除图片";
+      action("toggleImage").disabled = busy || (selectedImage.unplaced ? !bodyEditing : bodyEditing || savedToTarget());
     };
     const changeImageChoice = (decision: ImageDecision, remove: boolean): void => {
       if (busy || bodyEditing || savedToTarget()) return;
@@ -787,6 +786,15 @@ export default class NoospherePlugin extends Plugin {
         const button = document.createElement("button");
         button.type = "button";
         button.dataset.imageFull = decision.full;
+        button.draggable = bodyEditing && !busy;
+        button.addEventListener("dragstart", event => {
+          const html = article && articleImageHTML(decision, article.url);
+          if (!bodyEditing || busy || !html || !event.dataTransfer) { event.preventDefault(); return; }
+          // 标准 HTML 拖放交给思源 Protyle 的原生处理，保持落点、格式及撤销语义。
+          event.dataTransfer.effectAllowed = "copy";
+          event.dataTransfer.setData("text/html", html);
+          event.dataTransfer.setData("text/plain", decision.full);
+        });
         button.setAttribute("aria-label", `查看图片 ${index + 1}：${decision.alt || "文章图片"}`);
         button.title = decision.error || decision.description;
         const url = article && previewUrl(decision.previewUrl || decision.url, article.url, true);
@@ -796,6 +804,7 @@ export default class NoospherePlugin extends Plugin {
           preview.alt = decision.alt || `文章图片 ${index + 1}`;
           preview.loading = "lazy";
           preview.referrerPolicy = "no-referrer";
+          preview.draggable = false;
           preview.addEventListener("error", () => {
             const fallback = document.createElement("span");
             fallback.className = "noosphere__asset-missing";
@@ -831,13 +840,12 @@ export default class NoospherePlugin extends Plugin {
     };
     action("closeImage").addEventListener("click", closeImage);
     action("toggleImage").addEventListener("click", () => {
-      if (!selectedImage || busy || bodyEditing || savedToTarget()) return;
+      if (!selectedImage || busy) return;
       if (selectedImage.unplaced) {
-        // 插入由用户明确选择；不猜测丢失引用的位置，也不重新请求模型。
-        reviewedMarkdown = `${(reviewedMarkdown || markdown.value).trimEnd()}\n\n${selectedImage.full}`;
-        selectedImage.unplaced = false;
-        editorState = undefined;
-        changeImageChoice(selectedImage, false);
+        if (!bodyEditing || !nativeEditor?.insertImage(selectedImage)) {
+          showMessage("请先进入正文编辑，并在需要插图的位置放置光标。", 5000, "info"); return;
+        }
+        selectedImage = undefined; renderSelectedImage(); nativeEditor.focus();
       } else changeImageChoice(selectedImage, !selectedImage.remove);
     });
     lightbox.addEventListener("click", event => { if (event.target === lightbox) closeImage(); });

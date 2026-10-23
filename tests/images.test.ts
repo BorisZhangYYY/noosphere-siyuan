@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewArticleDetailed } from "../src/review/provider";
-import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages } from "../src/review/images";
+import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages, syncEditedImages } from "../src/review/images";
 import { DEFAULT_SETTINGS, type Article, type Settings } from "../src/types";
 import { RequestCancelledError } from "../src/siyuan/api";
 
@@ -40,6 +40,14 @@ it("cancels all vision workers without marking images failed or starting more re
 });
 
 describe("image review", () => {
+  it("keeps native deletion and undo in the asset inventory and clears unplaced when reinserted", () => {
+    const original = imageInventory(article.markdown, article.url).map(item => ({ ...item, status: "reviewed" as const, description: "已识别", previewUrl: "/assets/local.png" }));
+    const absent = syncEditedImages("编辑后的正文", article.url, original);
+    expect(absent[0]).toMatchObject({ unplaced: true, remove: false, status: "reviewed", description: "已识别" });
+    const placed = syncEditedImages("前半 ![新说明](/assets/local.png) 后半", article.url, absent);
+    expect(placed).toHaveLength(1); expect(placed[0]).toMatchObject({ unplaced: false, remove: false, status: "reviewed", description: "已识别", alt: "新说明" });
+    expect(syncEditedImages("正文", article.url, [{ ...original[0], remove: true }])[0].remove).toBe(true);
+  });
   it("preserves a source photo as unplaced after bounded link repair without starting vision requests", async () => {
     const requests = mockReview("RELEVANT");
     const fixture = fetch;

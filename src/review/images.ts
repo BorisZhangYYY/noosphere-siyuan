@@ -33,8 +33,21 @@ export function preserveSourceImages(decisions: ImageDecision[], source: Article
     const identity = imageIdentity(item.url);
     if (present.has(identity)) return false;
     present.add(identity); return true;
-  }).map(item => ({ ...item, unplaced: true, description: "原图已保留，正文位置待确认；可手动插入正文末尾。" }));
+  }).map(item => ({ ...item, unplaced: true, description: "原图已保留，正文位置待确认。" }));
   return [...decisions, ...missing];
+}
+
+/** 原生编辑和撤销以正文为准同步位置，未放入正文的素材及既有识图判断继续保留。 */
+export function syncEditedImages(markdown: string, articleUrl: string, previous: ImageDecision[]): ImageDecision[] {
+  const matches = (old: ImageDecision, current: ImageDecision): boolean => [old.url, old.previewUrl].includes(current.url);
+  const present = imageInventory(markdown, articleUrl);
+  const decisions = present.map(item => {
+    const known = previous.find(old => matches(old, item));
+    return known ? { ...known, ...item, description: known.description, recommendedRemove: known.recommendedRemove,
+      remove: false, unplaced: false, status: known.status, error: known.error } : item;
+  });
+  return [...decisions, ...previous.filter(old => !present.some(item => matches(old, item)))
+    .map(item => item.remove ? item : { ...item, unplaced: true })];
 }
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */

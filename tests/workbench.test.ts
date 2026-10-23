@@ -63,6 +63,11 @@ vi.mock("../src/article/editor", async importOriginal => ({
     setReadOnly(value: boolean): void { this.readOnly = value; this.content.setAttribute("contenteditable", String(!value)); }
     setArticle(): void {}
     focus(): void { this.content.focus(); }
+    insertImage(image: { alt: string; url: string }): boolean {
+      if (this.readOnly) return false;
+      this.content.textContent = (this.content.textContent || "").replace("【图片引用待确认】", `![${image.alt}](${image.url})`);
+      this.flush(); return true;
+    }
     isUploading(): boolean { return false; }
     snapshot(): typeof this.state { return this.state; }
     destroy(): void { this.content.remove(); }
@@ -1208,7 +1213,7 @@ describe("workbench regression", () => {
     await launch(); await scrape(); click("review"); await ready();
     expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(appendArticle).not.toHaveBeenCalled();
   });
-  it("retains unresolved photos across reopen and inserts only on the user's request without automatic saving", async () => {
+  it("retains unresolved photos through native edits and inserts at the chosen cursor without automatic saving", async () => {
     const result = { ...completedReview(), markdown: "已审阅文字\n\n图【图片引用待确认】", linkRepair: { attempts: 3, unresolved: 1 },
       imageDecisions: imageInventory(article.markdown, article.url).map(item => ({ ...item, unplaced: true, description: "原图已保留，正文位置待确认" })) };
     vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(result);
@@ -1220,11 +1225,25 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-role="statusText"]')?.textContent || document.body.textContent).toContain("未自动保存");
     fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>("#entry")!.click();
     expect(document.querySelector(".noosphere__asset-state")!.textContent).toBe("待定位");
-    document.querySelector<HTMLButtonElement>("[data-image-full]")!.click();
-    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("插入正文末尾");
+    click("editArticle");
+    document.querySelector('[data-role="nativeContent"]')!.textContent = "前面的文字\n\n【图片引用待确认】\n\n后面的文字";
+    document.querySelector('[data-role="nativeContent"]')!.dispatchEvent(new Event("input"));
+    await vi.waitFor(() => expect(stored().imageDecisions[0].unplaced).toBe(true));
+    const asset = document.querySelector<HTMLButtonElement>("[data-image-full]")!;
+    expect(asset.draggable).toBe(true);
+    const transfer = { effectAllowed: "", setData: vi.fn() };
+    const drag = new Event("dragstart", { bubbles: true }); Object.defineProperty(drag, "dataTransfer", { value: transfer });
+    asset.dispatchEvent(drag);
+    expect(transfer.setData).toHaveBeenCalledWith("text/html", expect.stringContaining('src="https://example.com/photo.png"'));
+    asset.click();
+    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("插入光标位置");
     click("toggleImage");
     await vi.waitFor(() => expect(stored().markdown).toContain("![图](https://example.com/photo.png)"));
     expect(stored().imageDecisions[0].unplaced).toBe(false);
+    expect(stored().markdown.indexOf("![图]")).toBeLessThan(stored().markdown.indexOf("后面的文字"));
+    document.querySelector('[data-role="nativeContent"]')!.textContent = "前面的文字\n\n【图片引用待确认】\n\n后面的文字";
+    document.querySelector('[data-role="nativeContent"]')!.dispatchEvent(new Event("input"));
+    await vi.waitFor(() => expect(stored().imageDecisions[0].unplaced).toBe(true));
     expect(reviewArticleDetailed).toHaveBeenCalledOnce();
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     expect(history().entries.some(entry => entry.draft.imageDecisions.some(item => item.url === "https://example.com/photo.png"))).toBe(true);

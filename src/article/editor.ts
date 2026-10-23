@@ -9,6 +9,15 @@ import type { ImageDecision } from "../review/images";
 import { previewUrl, type MarkdownRenderer } from "./preview";
 
 const METADATA = "data-noosphere-metadata";
+
+/** 素材拖放与光标插入共用安全图片 HTML，地址沿用原图而非缩略图。 */
+export function articleImageHTML(image: Pick<ImageDecision, "url" | "alt">, articleUrl: string): string | undefined {
+  const url = previewUrl(image.url, articleUrl, true);
+  if (!url) return undefined;
+  const element = document.createElement("img");
+  element.src = url; element.alt = image.alt; element.referrerPolicy = "no-referrer";
+  return element.outerHTML;
+}
 const BLOCKS = [
   ["一级标题", "heading h1", "# \u200b"], ["二级标题", "heading h2", "## \u200b"],
   ["三级标题", "heading h3", "### \u200b"], ["四级标题", "heading h4", "#### \u200b"],
@@ -82,6 +91,7 @@ export class NativeArticleEditor {
   private lastContent = "";
   private article: Article;
   private readonly host: HTMLElement;
+  private insertionRange: Range | undefined;
 
   constructor(app: App, host: HTMLElement, article: Article, markdown: string,
     state: ArticleEditorState | undefined, private readonly onChange: (state: ArticleEditorState, title: string) => void) {
@@ -114,6 +124,9 @@ export class NativeArticleEditor {
       attributeFilter: ["style", "src", "data-type", "data-subtype", "fold", "checked"] });
     this.content.addEventListener("beforeinput", this.protectMetadata, true);
     this.content.addEventListener("drop", this.moveLocalBlocks, true);
+    document.addEventListener("selectionchange", this.rememberInsertionRange);
+    this.content.addEventListener("pointerup", this.rememberInsertionRange);
+    this.content.addEventListener("keyup", this.rememberInsertionRange);
     host.addEventListener("click", this.openBlockMenu, true);
     this.renderBlocks(); this.setReadOnly(true);
   }
@@ -122,6 +135,7 @@ export class NativeArticleEditor {
   setReadOnly(readOnly: boolean): void {
     if (this.readOnly === readOnly) return;
     this.readOnly = readOnly;
+    if (readOnly) this.insertionRange = undefined;
     if (readOnly) this.editor.disable(); else this.editor.enable();
     this.content.setAttribute("data-readonly", String(readOnly));
     this.lockMetadata();
@@ -143,6 +157,21 @@ export class NativeArticleEditor {
 
   focus(): void {
     this.content.focus({ preventScroll: true });
+  }
+
+  /** 使用离开正文前的真实选区和宿主插入事务；无有效光标时不回退到文末。 */
+  insertImage(image: Pick<ImageDecision, "url" | "alt">): boolean {
+    if (this.readOnly || this.disposed) return false;
+    this.rememberInsertionRange();
+    const range = this.insertionRange?.cloneRange();
+    const html = articleImageHTML(image, this.article.url);
+    if (!range || !html || !this.editableRange(range)) return false;
+    range.collapse(false);
+    this.editor.protyle.toolbar!.range = range;
+    this.editor.insert(this.editor.protyle.lute!.HTML2BlockDOM(html), false, true);
+    this.normalizeImages(); this.lockMetadata(); this.emit();
+    this.rememberInsertionRange();
+    return true;
   }
 
   /** 流式正文也使用当前思源编辑器的 Lute 配置和块排版。 */
@@ -170,6 +199,9 @@ export class NativeArticleEditor {
     if (this.timer) clearTimeout(this.timer);
     this.observer.disconnect(); this.content.removeEventListener("beforeinput", this.protectMetadata, true);
     this.content.removeEventListener("drop", this.moveLocalBlocks, true);
+    document.removeEventListener("selectionchange", this.rememberInsertionRange);
+    this.content.removeEventListener("pointerup", this.rememberInsertionRange);
+    this.content.removeEventListener("keyup", this.rememberInsertionRange);
     this.host.removeEventListener("click", this.openBlockMenu, true);
     this.editor.destroy();
   }
@@ -203,6 +235,21 @@ export class NativeArticleEditor {
       block.querySelectorAll("[contenteditable]").forEach(node => node.setAttribute("contenteditable", "false"));
     }
   }
+
+  private editableRange(range: Range): boolean {
+    return this.content.contains(range.startContainer) && this.content.contains(range.endContainer)
+      && !Array.from(this.content.querySelectorAll(`[${METADATA}]`)).some(node => range.intersectsNode(node));
+  }
+
+  /** 点击素材面板会改变浏览器焦点，但不能覆盖最后一次正文光标位置。 */
+  private readonly rememberInsertionRange = (): void => {
+    if (this.readOnly || this.disposed) return;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (this.editableRange(range)) this.insertionRange = range.cloneRange();
+    else if (this.content.contains(range.startContainer)) this.insertionRange = undefined;
+  };
 
   private readonly protectMetadata = (event: Event): void => {
     const selection = window.getSelection();
