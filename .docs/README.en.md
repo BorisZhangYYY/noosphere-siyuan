@@ -12,10 +12,10 @@ Capture web articles inside SiYuan, optionally review them with AI, edit them wi
 - Keep the captured original or review it with a configured model, perspective, output language and article format.
 - Edit inside the existing dialog with SiYuan's native block editor. Confirming an edit keeps it in the plugin; saving imports it into a SiYuan document.
 - Optionally review images, then manually restore or remove them before saving. Downloaded images go to SiYuan's asset directory; failed downloads retain their original links.
-
-Protected image and link references receive up to three short AI repair attempts if damaged. If repair still fails, the reviewed text and original image inventory are retained for manual confirmation. While editing, drag an asset into the native editor or place the caret in the body and choose the unplaced image's insert action. Native formatting, undo/redo and draft recovery are preserved; no insertion defaults to the article's end.
 - Preserve source metadata in separate paragraphs and keep searchable article history with processing results and destination choices.
 - Set the actual document title when saving to an empty unnamed document. Append an article to an existing document without replacing its content.
+
+Protected image and link references receive up to three short AI repair attempts if damaged. If repair still fails, the reviewed text and original image inventory are retained for manual confirmation. While editing, each asset card has an insert button: select the placeholder or other body text to replace it with the image, or place the caret to insert there. Clicking the thumbnail opens a separate preview; native drag, formatting, undo/redo and draft recovery are preserved. Insertion never defaults to the article's end.
 
 WeChat captures can fill missing author and publication fields from explicit article metadata and remove reader or comment interface text. Old and new Xiaoheihe share links are normalized to article URLs, with title cleanup and recovery. Recognized article cards provide missing author and date fields; comments and recommendations are removed while article images and polls are preserved. Zhihu login or verification pages are reported as capture failures.
 

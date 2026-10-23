@@ -128,7 +128,10 @@
 @media (prefers-reduced-motion:reduce) { .noosphere__review-progress progress:indeterminate { animation:none; } }
 .noosphere__asset-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:12px; }
 .noosphere__asset { position:relative; min-width:0; border:1px solid var(--ns-border); border-radius:7px; overflow:hidden; background:var(--ns-soft); }
-.noosphere__asset > button { display:block; width:100%; aspect-ratio:1; padding:0; border:0; background:transparent; cursor:pointer; }
+.noosphere__asset-preview { position:relative; display:block; width:100%; aspect-ratio:1; padding:0; border:0; background:transparent; cursor:pointer; }
+.noosphere__asset-insert { display:block; width:100%; min-height:28px; padding:4px; border:0; border-top:1px solid var(--ns-border); background:var(--b3-theme-background); color:var(--ns-accent); font-size:12px; cursor:pointer; }
+.noosphere__asset-insert:hover { background:var(--ns-soft); }
+.noosphere__asset-insert:disabled { opacity:.5; cursor:default; }
 .noosphere__asset img { display:block; width:100%; height:100%; object-fit:cover; }
 .noosphere__asset-missing { display:grid; align-content:center; height:100%; padding:8px; color:var(--b3-theme-on-surface); font-size:12px; }
 .noosphere__asset.is-removed img { opacity:.3; }

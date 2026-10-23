@@ -587,8 +587,9 @@ export default class NoospherePlugin extends Plugin {
       action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim()
         || (autoMode ? !this.settings.rootDocumentId.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("retryIndex").disabled = busy || !indexDocumentId;
-      action("toggleImage").disabled = busy || (selectedImage?.unplaced ? !bodyEditing : bodyEditing || savedToTarget());
+      action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
       imageDecisionList.querySelectorAll<HTMLButtonElement>("button[data-image-full]").forEach(button => { button.draggable = bodyEditing && !busy; });
+      imageDecisionList.querySelectorAll<HTMLButtonElement>("[data-insert-image]").forEach(button => { button.hidden = !bodyEditing; button.disabled = busy; });
       for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
       action("openClassificationRoot").disabled = busy || savingSettings || openingClassificationRoot || !rootDocument.value.trim();
@@ -743,7 +744,7 @@ export default class NoospherePlugin extends Plugin {
       lightbox.hidden = !selectedImage;
       if (!selectedImage || !article) return;
       role("imageTitle").textContent = selectedImage.alt || "文章图片";
-      role("imageDescription").textContent = selectedImage.unplaced ? "原图已保留，正文位置待确认。进入正文编辑后，可将素材拖到目标位置，或在正文放置光标后插入。" : selectedImage.error || selectedImage.description;
+      role("imageDescription").textContent = selectedImage.unplaced ? "原图已保留，正文位置待确认。进入正文编辑后，可选中待确认提示，再点击素材卡片的“插入”替换；也可放置光标插图或拖入正文。" : selectedImage.error || selectedImage.description;
       const url = previewUrl(selectedImage.previewUrl || selectedImage.url, article.url, true);
       const image = role("imageLarge") as HTMLImageElement;
       image.alt = selectedImage.alt || "文章图片";
@@ -754,8 +755,9 @@ export default class NoospherePlugin extends Plugin {
       const source = previewUrl(selectedImage.url, article.url, true);
       link.hidden = !source;
       if (source) link.href = source;
-      action("toggleImage").textContent = selectedImage.unplaced ? "插入光标位置" : selectedImage.remove ? "恢复图片" : "移除图片";
-      action("toggleImage").disabled = busy || (selectedImage.unplaced ? !bodyEditing : bodyEditing || savedToTarget());
+      action("toggleImage").hidden = !!selectedImage.unplaced;
+      action("toggleImage").textContent = selectedImage.remove ? "恢复图片" : "移除图片";
+      action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
     };
     const changeImageChoice = (decision: ImageDecision, remove: boolean): void => {
       if (busy || bodyEditing || savedToTarget()) return;
@@ -769,6 +771,14 @@ export default class NoospherePlugin extends Plugin {
       renderSelectedImage();
       persistDraft();
       updateActions();
+    };
+    /** 素材卡片直接使用正文保存的选区，不经过图片预览弹层或请求模型。 */
+    const insertAssetImage = (decision: ImageDecision): void => {
+      if (busy) return;
+      if (!bodyEditing || !nativeEditor?.insertImage(decision)) {
+        showMessage("请先进入正文编辑，放置光标或选中需要替换的文字。", 5000, "info"); return;
+      }
+      nativeEditor.focus();
     };
     const renderImageDecisions = (): void => {
       imageDecisionList.replaceChildren();
@@ -785,6 +795,7 @@ export default class NoospherePlugin extends Plugin {
         row.classList.toggle("is-removed", decision.remove);
         const button = document.createElement("button");
         button.type = "button";
+        button.className = "noosphere__asset-preview";
         button.dataset.imageFull = decision.full;
         button.draggable = bodyEditing && !busy;
         button.addEventListener("dragstart", event => {
@@ -828,7 +839,15 @@ export default class NoospherePlugin extends Plugin {
         checkbox.setAttribute("aria-label", `移除图片 ${index + 1}`);
         checkbox.addEventListener("change", () => changeImageChoice(decision, checkbox.checked));
         choice.append(checkbox);
-        row.append(button, choice);
+        const insert = document.createElement("button");
+        insert.type = "button"; insert.className = "noosphere__asset-insert";
+        insert.dataset.insertImage = String(index);
+        insert.textContent = "插入";
+        insert.setAttribute("aria-label", `插入图片 ${index + 1}：${decision.alt || "文章图片"}`);
+        insert.title = "替换正文选区，或插入光标位置";
+        insert.hidden = !bodyEditing; insert.disabled = busy;
+        insert.addEventListener("click", () => insertAssetImage(decision));
+        row.append(button, choice, insert);
         imageDecisionList.append(row);
       }
     };
@@ -840,13 +859,7 @@ export default class NoospherePlugin extends Plugin {
     };
     action("closeImage").addEventListener("click", closeImage);
     action("toggleImage").addEventListener("click", () => {
-      if (!selectedImage || busy) return;
-      if (selectedImage.unplaced) {
-        if (!bodyEditing || !nativeEditor?.insertImage(selectedImage)) {
-          showMessage("请先进入正文编辑，并在需要插图的位置放置光标。", 5000, "info"); return;
-        }
-        selectedImage = undefined; renderSelectedImage(); nativeEditor.focus();
-      } else changeImageChoice(selectedImage, !selectedImage.remove);
+      if (selectedImage && !selectedImage.unplaced) changeImageChoice(selectedImage, !selectedImage.remove);
     });
     lightbox.addEventListener("click", event => { if (event.target === lightbox) closeImage(); });
     lightbox.addEventListener("keydown", event => {

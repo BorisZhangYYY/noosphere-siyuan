@@ -23,6 +23,7 @@ vi.mock("siyuan", () => ({
     insert(html: string, isBlock: boolean, useProtyleRange: boolean): void {
       runtime.insert(html, isBlock, useProtyleRange);
       const range = this.protyle.toolbar.range as Range;
+      range.deleteContents();
       range.insertNode(range.createContextualFragment(html));
     }
   }, ProtyleMethod: {},
@@ -68,6 +69,20 @@ it("never appends when there is no body caret, the editor is readonly, or metada
   select(content.querySelector('[data-noosphere-metadata] [contenteditable]')!.firstChild!, 1);
   expect(active!.insertImage(image)).toBe(false);
   expect(runtime.insert).not.toHaveBeenCalled();
+});
+
+it("passes the complete saved selection to Protyle and replaces only the chosen placeholder", () => {
+  const { content, changed } = start(); active!.setReadOnly(false);
+  const span = content.querySelector('[data-node-id="body"] span')!;
+  span.textContent = "前半【图片引用待确认】后半【图片引用待确认】";
+  const range = document.createRange(); range.setStart(span.firstChild!, 2); range.setEnd(span.firstChild!, 11);
+  window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range); document.dispatchEvent(new Event("selectionchange"));
+  const button = document.createElement("button"); button.textContent = "插入"; document.body.append(button); select(button.firstChild!, 0);
+  expect(active!.insertImage(image)).toBe(true);
+  const snapshot = active!.snapshot();
+  expect(snapshot.nativeMarkdown).toContain(`前半![${image.alt}](${image.url})后半【图片引用待确认】`);
+  expect(snapshot.blockDOM).toContain('style="color: red"');
+  expect(changed).toHaveBeenCalledOnce();
 });
 
 it("creates safe transferable image HTML using the source address", () => {

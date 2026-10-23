@@ -159,14 +159,13 @@ export class NativeArticleEditor {
     this.content.focus({ preventScroll: true });
   }
 
-  /** 使用离开正文前的真实选区和宿主插入事务；无有效光标时不回退到文末。 */
+  /** 原生事务替换离开正文前的选区，空选区按光标插入；无有效位置时不回退到文末。 */
   insertImage(image: Pick<ImageDecision, "url" | "alt">): boolean {
     if (this.readOnly || this.disposed) return false;
     this.rememberInsertionRange();
     const range = this.insertionRange?.cloneRange();
     const html = articleImageHTML(image, this.article.url);
     if (!range || !html || !this.editableRange(range)) return false;
-    range.collapse(false);
     this.editor.protyle.toolbar!.range = range;
     this.editor.insert(this.editor.protyle.lute!.HTML2BlockDOM(html), false, true);
     this.normalizeImages(); this.lockMetadata(); this.emit();

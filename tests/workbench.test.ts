@@ -1225,6 +1225,7 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-role="statusText"]')?.textContent || document.body.textContent).toContain("未自动保存");
     fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>("#entry")!.click();
     expect(document.querySelector(".noosphere__asset-state")!.textContent).toBe("待定位");
+    expect(document.querySelector<HTMLButtonElement>("[data-insert-image]")!.hidden).toBe(true);
     click("editArticle");
     document.querySelector('[data-role="nativeContent"]')!.textContent = "前面的文字\n\n【图片引用待确认】\n\n后面的文字";
     document.querySelector('[data-role="nativeContent"]')!.dispatchEvent(new Event("input"));
@@ -1236,8 +1237,13 @@ describe("workbench regression", () => {
     asset.dispatchEvent(drag);
     expect(transfer.setData).toHaveBeenCalledWith("text/html", expect.stringContaining('src="https://example.com/photo.png"'));
     asset.click();
-    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("插入光标位置");
-    click("toggleImage");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="toggleImage"]')!.hidden).toBe(true);
+    click("closeImage");
+    const insert = document.querySelector<HTMLButtonElement>("[data-insert-image]")!;
+    expect(insert.hidden).toBe(false);
+    expect(insert.textContent).toBe("插入");
+    insert.click();
+    expect(document.querySelector<HTMLElement>('[data-role="imageLightbox"]')!.hidden).toBe(true);
     await vi.waitFor(() => expect(stored().markdown).toContain("![图](https://example.com/photo.png)"));
     expect(stored().imageDecisions[0].unplaced).toBe(false);
     expect(stored().markdown.indexOf("![图]")).toBeLessThan(stored().markdown.indexOf("后面的文字"));
@@ -1247,6 +1253,8 @@ describe("workbench regression", () => {
     expect(reviewArticleDetailed).toHaveBeenCalledOnce();
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     expect(history().entries.some(entry => entry.draft.imageDecisions.some(item => item.url === "https://example.com/photo.png"))).toBe(true);
+    click("confirmArticle");
+    expect(document.querySelector<HTMLButtonElement>("[data-insert-image]")!.hidden).toBe(true);
   });
   it("does not save when review fails or is cancelled", async () => {
     vi.mocked(reviewArticleDetailed).mockRejectedValueOnce(new Error("模型失败"));
