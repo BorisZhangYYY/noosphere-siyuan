@@ -1,4 +1,4 @@
-/** 分类与分类描述共用四种模型协议的短文本请求。 */
+/** 分类、分类描述与审阅引用修复共用四种模型协议的短文本请求。 */
 import { proxyRequest } from "../siyuan/api";
 import { modelEndpoint } from "./endpoint";
 import { headers } from "./provider-headers";
@@ -57,10 +57,10 @@ function responseText(settings: Settings, body: string): string {
 }
 
 /** 只返回文字，不触发分类创建或任何思源写入。 */
-export async function requestShortText(settings: Settings, systemPrompt: string, userMessage: string, signal?: AbortSignal, outputTokens?: number): Promise<string> {
+export async function requestShortText(settings: Settings, systemPrompt: string, userMessage: string, signal?: AbortSignal, outputTokens?: number, timeoutMs = 120000): Promise<string> {
   if (!settings.modelKey.trim() || !settings.modelName.trim()) throw new Error("请先配置模型 API Key 和模型名称");
   const { endpoint, payload } = requestShape(settings, systemPrompt, userMessage, outputTokens);
-  const response = await proxyRequest(endpoint, "POST", headers(settings), payload, "text", 120000, signal);
+  const response = await proxyRequest(endpoint, "POST", headers(settings), payload, "text", timeoutMs, signal);
   const text = responseText(settings, response.body).trim();
   if (!text) throw new Error("模型没有返回内容");
   return text;

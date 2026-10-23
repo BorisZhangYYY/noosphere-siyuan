@@ -11,7 +11,7 @@ const PROMPT = `你正在审阅文章图片。只返回 JSON：{"classification"
 保留代码和界面截图、技术图、图表、与正文相关的照片或插画。仅在确定图片是二维码、关注订阅图、广告横幅或无关占位装饰时标记 PROMOTION。混合内容、证据不足或无法确定时标记 RELEVANT。不要凭图片修改文章事实。`;
 
 interface ImageRef { full: string; raw: string; alt: string; url: string }
-export interface ImageDecision { full: string; alt: string; url: string; description: string; recommendedRemove: boolean; remove: boolean; status?: "pending" | "reviewed" | "failed"; error?: string; previewUrl?: string }
+export interface ImageDecision { full: string; alt: string; url: string; description: string; recommendedRemove: boolean; remove: boolean; status?: "pending" | "reviewed" | "failed"; error?: string; previewUrl?: string; unplaced?: boolean }
 export interface ImageReviewResult { decisions: ImageDecision[]; reviewed: number; warnings: string[] }
 
 /** 兼容旧草稿的文字状态，正确显示素材的审阅结果。 */
@@ -24,6 +24,17 @@ export function imageInventory(markdown: string, articleUrl: string): ImageDecis
   return [...new Map(refs(markdown, articleUrl).map(ref => [ref.full, ref])).values()].map(ref => ({
     full: ref.full, alt: ref.alt, url: ref.url, description: "未审阅，默认保留", recommendedRemove: false, remove: false, status: "pending",
   }));
+}
+
+/** 引用修复失败时把未出现在文字稿的原图保留在素材中，不推测正文位置或额外调用识图。 */
+export function preserveSourceImages(decisions: ImageDecision[], source: Article): ImageDecision[] {
+  const present = new Set(decisions.map(item => imageIdentity(item.url)));
+  const missing = imageInventory(source.markdown, source.url).filter(item => {
+    const identity = imageIdentity(item.url);
+    if (present.has(identity)) return false;
+    present.add(identity); return true;
+  }).map(item => ({ ...item, unplaced: true, description: "原图已保留，正文位置待确认；可手动插入正文末尾。" }));
+  return [...decisions, ...missing];
 }
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */

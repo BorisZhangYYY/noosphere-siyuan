@@ -265,6 +265,7 @@ export default class NoospherePlugin extends Plugin {
     let openingClassificationRoot = false;
     let streamTitle = article?.title || "";
     let imageStage = "";
+    let reviewHasUnresolvedLinks = false;
     let historyVisible = false;
     let selectedImage: ImageDecision | undefined;
     let persistDraft: (delayMs?: number) => void = () => undefined;
@@ -755,7 +756,7 @@ export default class NoospherePlugin extends Plugin {
       const source = previewUrl(selectedImage.url, article.url, true);
       link.hidden = !source;
       if (source) link.href = source;
-      action("toggleImage").textContent = selectedImage.remove ? "恢复图片" : "移除图片";
+      action("toggleImage").textContent = selectedImage.unplaced ? "插入正文末尾" : selectedImage.remove ? "恢复图片" : "移除图片";
     };
     const changeImageChoice = (decision: ImageDecision, remove: boolean): void => {
       if (busy || bodyEditing || savedToTarget()) return;
@@ -805,7 +806,7 @@ export default class NoospherePlugin extends Plugin {
         }
         const state = document.createElement("span");
         const status = imageDecisionStatus(decision);
-        state.textContent = decision.remove ? "已移除" : status === "pending" ? "待审阅" : status === "failed" ? "识别失败" : "已审阅";
+        state.textContent = decision.remove ? "已移除" : decision.unplaced ? "待定位" : status === "pending" ? "待审阅" : status === "failed" ? "识别失败" : "已审阅";
         state.className = `noosphere__asset-state is-${status}`;
         button.append(state);
         button.addEventListener("click", () => { selectedImage = decision; renderSelectedImage(); action("closeImage").focus(); });
@@ -829,7 +830,16 @@ export default class NoospherePlugin extends Plugin {
       Array.from(imageDecisionList.querySelectorAll<HTMLButtonElement>("button")).find(button => button.dataset.imageFull === full)?.focus();
     };
     action("closeImage").addEventListener("click", closeImage);
-    action("toggleImage").addEventListener("click", () => { if (selectedImage) changeImageChoice(selectedImage, !selectedImage.remove); });
+    action("toggleImage").addEventListener("click", () => {
+      if (!selectedImage || busy || bodyEditing || savedToTarget()) return;
+      if (selectedImage.unplaced) {
+        // 插入由用户明确选择；不猜测丢失引用的位置，也不重新请求模型。
+        reviewedMarkdown = `${(reviewedMarkdown || markdown.value).trimEnd()}\n\n${selectedImage.full}`;
+        selectedImage.unplaced = false;
+        editorState = undefined;
+        changeImageChoice(selectedImage, false);
+      } else changeImageChoice(selectedImage, !selectedImage.remove);
+    });
     lightbox.addEventListener("click", event => { if (event.target === lightbox) closeImage(); });
     lightbox.addEventListener("keydown", event => {
       if (event.key === "Escape") { event.stopPropagation(); closeImage(); }
@@ -950,6 +960,7 @@ export default class NoospherePlugin extends Plugin {
       if (reviewing) role("reviewState").textContent = "审阅中";
       if (reviewing) setReviewProgress("正文审阅", null, "等待模型返回");
       if (reviewing) {
+        reviewHasUnresolvedLinks = false;
         streamingMarkdown = ""; previewMarkdown = ""; imageStage = ""; followStream = true; textFollowComplete = false; streamBodyValidated = false;
         action("followStream").setAttribute("aria-pressed", "true");
         action("followStream").textContent = "跟随输出";
@@ -964,7 +975,7 @@ export default class NoospherePlugin extends Plugin {
         if (this.uninstalled) return;
         throwIfCancelled(controller?.signal);
         successful = true;
-        if (isReview && saveMode() === "auto") {
+        if (isReview && saveMode() === "auto" && !reviewHasUnresolvedLinks) {
           // 审阅结果已确认；进入保存阶段后不能再用“取消审阅”恢复旧快照。
           reviewing = false;
           this.cancelActiveReview = null;
@@ -983,7 +994,7 @@ export default class NoospherePlugin extends Plugin {
         if (isReview && dialogClosed) showMessage(`「${article?.title || "文章"}」${message}`, 7000);
         if (isReview) {
           const failed = imageDecisions.filter(item => !item.remove && imageDecisionStatus(item) === "failed").length;
-          setReviewProgress(failed ? `已结束 · ${failed} 张识别失败` : "审阅完成", 100, "100%");
+          setReviewProgress(reviewHasUnresolvedLinks ? "审阅稿已保留 · 引用待确认" : failed ? `已结束 · ${failed} 张识别失败` : "审阅完成", 100, "100%");
         }
       } catch (error) {
         if (this.uninstalled) return;
@@ -1663,7 +1674,8 @@ export default class NoospherePlugin extends Plugin {
           article = result.article; editorState = undefined;
           reviewedMarkdown = result.markdown;
           markdown.value = result.markdown;
-          imageDecisions = [];
+          imageDecisions = result.imageDecisions;
+          reviewHasUnresolvedLinks = !!result.linkRepair?.unresolved;
           reviewInfo = { summary: result.summary || "", model: settings.modelName, perspective: settings.reviewPerspective, completedAt: new Date().toISOString() };
           textReviewed = true;
           markUnsaved();
@@ -1677,6 +1689,7 @@ export default class NoospherePlugin extends Plugin {
         const reviewInput = bodyEdited ? markdown.value : article.markdown;
         const result = await reviewArticleDetailed(article, { ...settings, outputLanguage: normalizeOutputLanguage(workOutputLanguage.value) }, reviewInput, {
           signal, onTextReviewed: acceptText, onImageProgress: progress => { throwIfCancelled(signal); acceptImageProgress(progress); },
+          onLinkRepair: attempt => setReviewProgress(`链接局部修复 ${attempt}/3`, null, "仅修复引用编号"),
           onStreamActivity: () => currentPlayback.observeArrival(),
           onTextDelta: response => {
             if (this.uninstalled) throw new Error("知流已卸载");
@@ -1729,6 +1742,7 @@ export default class NoospherePlugin extends Plugin {
         const failedImages = imageDecisions.filter(item => imageDecisionStatus(item) === "failed");
         if (failedImages.length) showMessage(`图片识别有 ${failedImages.length} 张未完成，相关图片已保留。${failedImages[0].error || "未能识别图片"}`, 7000, "error");
         const enrichment = result.metadataAccepted.length ? "，补全了有原文证据的元数据" : "";
+        if (result.linkRepair?.unresolved) return `审阅稿已保留，${result.linkRepair.unresolved} 处引用待确认；原图保留在素材中，可手动插入。${saveMode() === "auto" ? "本次未自动保存，请确认后手动保存。" : "请确认后保存。"}`;
         return result.imagesReviewed ? `审阅完成${enrichment}；检查了 ${result.imagesReviewed} 张图片，请核对移除建议。` : `审阅完成${enrichment}，请检查正文。`;
       });
     });

@@ -40,7 +40,7 @@ it("cancels all vision workers without marking images failed or starting more re
 });
 
 describe("image review", () => {
-  it("rejects an unknown image URL before accepting text or starting vision requests", async () => {
+  it("preserves a source photo as unplaced after bounded link repair without starting vision requests", async () => {
     const requests = mockReview("RELEVANT");
     const fixture = fetch;
     const invented = "https://example.com/pci.png";
@@ -54,8 +54,12 @@ describe("image review", () => {
       return fixture(path, options);
     }));
     const accept = vi.fn();
-    await expect(reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: accept })).rejects.toThrow("受保护的链接");
-    expect(accept).not.toHaveBeenCalled();
+    const result = await reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: accept });
+    expect(result.linkRepair).toEqual({ attempts: 3, unresolved: 1 });
+    expect(result.imageDecisions).toEqual([expect.objectContaining({ unplaced: true, url: "https://example.com/pic.png" })]);
+    expect(result.markdown).not.toContain(invented);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(accept).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(0);
     expect(article.markdown).toContain("https://example.com/pic.png");
   });

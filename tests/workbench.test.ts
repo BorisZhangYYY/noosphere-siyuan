@@ -1208,6 +1208,27 @@ describe("workbench regression", () => {
     await launch(); await scrape(); click("review"); await ready();
     expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(appendArticle).not.toHaveBeenCalled();
   });
+  it("retains unresolved photos across reopen and inserts only on the user's request without automatic saving", async () => {
+    const result = { ...completedReview(), markdown: "已审阅文字\n\n图【图片引用待确认】", linkRepair: { attempts: 3, unresolved: 1 },
+      imageDecisions: imageInventory(article.markdown, article.url).map(item => ({ ...item, unplaced: true, description: "原图已保留，正文位置待确认" })) };
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(result);
+    await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
+    expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(classifyArticle).not.toHaveBeenCalled();
+    expect(stored().article?.markdown).toBe(article.markdown);
+    expect(stored().markdown).toBe(result.markdown);
+    expect(stored().imageDecisions[0]).toMatchObject({ unplaced: true, remove: false, url: "https://example.com/photo.png" });
+    expect(document.querySelector('[data-role="statusText"]')?.textContent || document.body.textContent).toContain("未自动保存");
+    fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>("#entry")!.click();
+    expect(document.querySelector(".noosphere__asset-state")!.textContent).toBe("待定位");
+    document.querySelector<HTMLButtonElement>("[data-image-full]")!.click();
+    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("插入正文末尾");
+    click("toggleImage");
+    await vi.waitFor(() => expect(stored().markdown).toContain("![图](https://example.com/photo.png)"));
+    expect(stored().imageDecisions[0].unplaced).toBe(false);
+    expect(reviewArticleDetailed).toHaveBeenCalledOnce();
+    expect(ensureArticleDocument).not.toHaveBeenCalled();
+    expect(history().entries.some(entry => entry.draft.imageDecisions.some(item => item.url === "https://example.com/photo.png"))).toBe(true);
+  });
   it("does not save when review fails or is cancelled", async () => {
     vi.mocked(reviewArticleDetailed).mockRejectedValueOnce(new Error("模型失败"));
     await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
