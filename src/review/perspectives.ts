@@ -1,18 +1,18 @@
 /** Review viewpoints and free-form article-format instructions. */
 import { composeArticle } from "../article/compose";
 import { outputLanguagePrompt } from "./language";
-import { nestReviewBodyHeadings } from "./headings";
 import type { Article, ReviewPerspective, Settings } from "../types";
 
 const COMMON_PROMPT = `你正在把抓取到的文章整理为个人知识库中的可信审阅稿。
 
 ## 信息边界
 - 保留事实、数据、阈值、引文、代码、表格、推理链、失败经验和关键类比；不得编造来源或强化原文结论。
-- 保留有效图片和链接及其叙事位置；图片地址必须逐字复制输入中的地址，不得增删字符、改写路径或添加输入中不存在的图片。
+- 输入中的链接和配图地址已由知流锁定为 __NOOSPHERE_LINK_编号__ 等引用标识。保留标识及其 Markdown 语法与叙事位置，不能修改、猜测、展开或编造地址；真实链接由知流还原。图片说明和链接显示文字可以正常整理。
 - 删除广告、推广、关注订阅提示、平台交互噪音和跟踪文本；有事实与限定条件的旁白必须保留。
 
 ## 输出
 - 按文章格式要求自由安排正文的标题和段落；不要用固定内容槽位。
+- 文章格式要求中的标题构成章节层级；放入某个章节的原文小标题应比父标题至少低一级，并保持原有相对层级。正文内的小结也属于所在章节，不能因沿用原文的 # 数量而与父章节并列。只有文章格式要求明确列出的同级章节才并列。
 - 不要自行输出来源、作者或发布时间；知流负责组装这些元数据。
 - AI 补充的内容使用引用块并注明是 AI 补充。
 - 严格遵循末尾的 JSON 接口格式。`;
@@ -140,7 +140,7 @@ function sourceSupports(value: string, evidence: string, isDate: boolean): boole
 
 /** Accept only evidence-backed metadata for fields the crawler left empty. */
 export function parseReviewResult(response: string, article: Article, settings: Settings): ReviewResult {
-  const perspective = getPerspective(settings);
+  getPerspective(settings);
   const candidate = response.trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
   let parsed: { title?: unknown; markdown?: unknown; summary?: unknown; metadata_candidates?: Record<string, unknown> };
   try { parsed = JSON.parse(candidate) as typeof parsed; }
@@ -164,7 +164,6 @@ export function parseReviewResult(response: string, article: Article, settings: 
   let markdown = parsed.markdown.trim().replace(/^#\s+[^\n]*\n+/, "");
   markdown = markdown.replace(/^(?:>\s*(?:来源|Source|作者|Author|发布时间|Published)\s*[:：][^\n]*(?:\n|$)\s*)+/i, "").trim();
   if (!markdown) throw new Error("AI 审阅结果缺少正文");
-  markdown = nestReviewBodyHeadings(markdown, perspective.id);
   return { markdown: composeArticle(enriched, `# ${title}\n\n${markdown}`), article: enriched, summary: parsed.summary.trim().slice(0, 1600), metadataAccepted };
 }
 

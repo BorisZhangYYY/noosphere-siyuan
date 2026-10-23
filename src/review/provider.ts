@@ -6,6 +6,7 @@ import { imageReviewSettings, restoreImages, reviewImages, type ImageDecision, t
 import { modelEndpoint } from "./endpoint";
 import { headers } from "./provider-headers";
 import { ModelReviewStream } from "./stream";
+import { lockReviewLinks } from "./links";
 export { modelEndpoint } from "./endpoint";
 
 const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
@@ -73,7 +74,8 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
   if (settings.reviewPerspective === "raw") return { markdown: article.markdown, article, summary: "", metadataAccepted: [], imageDecisions: [], imagesReviewed: 0, imageWarnings: [] };
   const imageSettings = settings.imageReview ? imageReviewSettings(settings) : settings;
   if (!settings.modelKey.trim() || !settings.modelName.trim()) throw new Error("请配置模型 API Key 和模型名称");
-  const userContent = `来源：${article.url}\n标题：${article.title}\n抓取到的作者：${article.author || "缺失"}\n抓取到的发布时间：${article.publishedAt || "缺失"}\n\n${draftMarkdown}`;
+  const links = lockReviewLinks(`来源：${article.url}\n标题：${article.title}\n抓取到的作者：${article.author || "缺失"}\n抓取到的发布时间：${article.publishedAt || "缺失"}\n\n${draftMarkdown}`);
+  const userContent = links.input;
   const apiHeaders = headers(settings);
   let endpoint: string;
   let payload: object;
@@ -94,7 +96,10 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
   let streamedText: string | null = null;
   try {
     if (options.onTextDelta) {
-      const stream = new ModelReviewStream(settings.modelFormat, options.onTextDelta);
+      const stream = new ModelReviewStream(settings.modelFormat, (text: string): void => {
+        const preview = links.preview(text);
+        if (preview !== undefined) options.onTextDelta?.(preview);
+      });
       const streamEndpoint = settings.modelFormat === "google" ? `${endpoint.replace(/:generateContent$/, ":streamGenerateContent")}?alt=sse` : endpoint;
       const streamPayload = settings.modelFormat === "google" ? payload : { ...payload, stream: true };
       try {
@@ -140,7 +145,7 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
     if (!responseText?.trim()) throw new Error(errorText(result));
   }
   if (!responseText?.trim()) throw new Error("模型未返回审阅内容");
-  const reviewed = parseReviewResult(responseText, article, settings);
+  const reviewed = parseReviewResult(links.restoreResponse(responseText), article, settings);
   const markdown = restoreImages(reviewed.markdown, { ...article, markdown: draftMarkdown });
   options.onTextReviewed?.({ markdown, article: reviewed.article, summary: reviewed.summary, metadataAccepted: reviewed.metadataAccepted, imageDecisions: [], imagesReviewed: 0, imageWarnings: [] });
   throwIfCancelled(options.signal);

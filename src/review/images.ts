@@ -200,11 +200,9 @@ export async function reviewImages(article: Article, summary: string, settings: 
   return snapshot();
 }
 
-/** 拒绝文字模型新增或改写的图片地址，再按原文位置补回遗漏配图。 */
+/** 链接已在请求边界锁定；此处只按原文位置补回文字模型遗漏的配图。 */
 export function restoreImages(markdown: string, source: Article, kept: ImageRef[] = refs(source.markdown, source.url)): string {
-  const allowed = new Set(kept.map(image => image.url));
-  let result = mapImages(markdown, (full: string, _alt: string, raw: string): string =>
-    allowed.has(resolveImageReference(raw.replace(/^<|>$/g, ""), source.url)) ? full : "");
+  let result = markdown;
   const present = new Set(refs(result, source.url).map(image => image.url));
   const sourceLines = source.markdown.split("\n");
   for (const image of kept) {

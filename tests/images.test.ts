@@ -40,7 +40,7 @@ it("cancels all vision workers without marking images failed or starting more re
 });
 
 describe("image review", () => {
-  it("removes a model-invented image before vision requests and restores the actual source image", async () => {
+  it("rejects an unknown image URL before accepting text or starting vision requests", async () => {
     const requests = mockReview("RELEVANT");
     const fixture = fetch;
     const invented = "https://example.com/pci.png";
@@ -53,18 +53,17 @@ describe("image review", () => {
       }
       return fixture(path, options);
     }));
-    const result = await reviewArticleDetailed(article, settings);
-    expect(result.markdown).toContain("![screenshot](https://example.com/pic.png)");
-    expect(result.markdown).not.toContain(invented);
-    expect(result.imageDecisions).toHaveLength(1);
-    expect(result.imageWarnings).toEqual([]);
-    expect(requests.filter(request => request.method === "GET").map(request => request.url)).toEqual(["https://example.com/pic.png"]);
+    const accept = vi.fn();
+    await expect(reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: accept })).rejects.toThrow("受保护的链接");
+    expect(accept).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(0);
+    expect(article.markdown).toContain("https://example.com/pic.png");
   });
 
   it("keeps valid source URLs with edited captions or relative forms, including images added to the input draft", () => {
     const source = { ...article, markdown: "Evidence\n\n![original](/pic.png)\n\n![本地](assets/local.png)" };
-    const reviewed = "Evidence\n\n![new caption](https://example.com/pic.png)\n\n![本地](/assets/local.png)\n\n![fake](https://example.com/made-up.png)";
-    expect(restoreImages(reviewed, source)).toBe(reviewed.replace("![fake](https://example.com/made-up.png)", ""));
+    const reviewed = "Evidence\n\n![new caption](https://example.com/pic.png)\n\n![本地](/assets/local.png)";
+    expect(restoreImages(reviewed, source)).toBe(reviewed);
   });
 
   it("treats image syntax in code as examples rather than display images or restored image evidence", () => {
