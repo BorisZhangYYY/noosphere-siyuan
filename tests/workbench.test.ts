@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const fixtures = vi.hoisted(() => ({ files: new Map<string, unknown>(), dialogs: [] as Array<{ destroy(): void }>, messages: vi.fn(), confirm: vi.fn() }));
 vi.mock("siyuan", () => ({
   Plugin: class {
-    eventBus = { on: vi.fn(), off: vi.fn() };
+    private events = new EventTarget();
+    eventBus = {
+      on: vi.fn((name: string, listener: EventListener): void => this.events.addEventListener(name, listener)),
+      off: vi.fn((name: string, listener: EventListener): void => this.events.removeEventListener(name, listener)),
+      emit: (name: string, detail: unknown): boolean => this.events.dispatchEvent(new CustomEvent(name, { detail })),
+    };
     app = {};
     addIcons(): void {}
     addCommand(): void {}
@@ -93,6 +98,7 @@ import { REVIEW_PERSPECTIVES } from "../src/review/perspectives";
 import { imageInventory } from "../src/review/images";
 import { localizeMarkdownImages } from "../src/images/localize";
 import { appendArticle } from "../src/siyuan/writer";
+import { checkSavedDocuments } from "../src/siyuan/saved";
 import { type CaptureDraft, DRAFT_STORAGE_NAME } from "../src/article/draft";
 import { type CaptureHistory, HISTORY_STORAGE_NAME } from "../src/article/history";
 import { openTab } from "siyuan";
@@ -116,6 +122,8 @@ function historyAction(operation: string, index = 0): void {
   document.querySelectorAll<HTMLElement>(".noosphere__history-entry")[index].querySelector<HTMLButtonElement>(`[data-history-action="${operation}"]`)!.click();
 }
 
+vi.mock("../src/siyuan/saved", () => ({ checkSavedDocuments: vi.fn() }));
+
 describe("workbench regression", () => {
   it("keeps assets collapsed with review status visible and shares the save scroller", async () => {
     await launch(); await scrape();
@@ -128,6 +136,7 @@ describe("workbench regression", () => {
   });
 
   beforeEach(() => {
+    vi.mocked(checkSavedDocuments).mockImplementation(async ids => new Map(ids.filter(Boolean).map(id => [id, true])));
     fixtures.files.clear(); fixtures.dialogs.length = 0; fixtures.messages.mockClear(); document.body.replaceChildren(); localStorage.clear();
     fixtures.files.set("settings.json", { ...DEFAULT_SETTINGS, firecrawlKey: "test", modelKey: "test", modelName: "test", reviewPerspective: "original" });
     vi.mocked(locateDocument).mockResolvedValue({ id: "20260101000000-aaaaaaa", notebook: "20260101000000-0000000", path: "/20260101000000-aaaaaaa.sy", hpath: "/知流", isNotebook: false });
@@ -412,7 +421,92 @@ describe("workbench regression", () => {
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
     expect(appendArticle).toHaveBeenCalledOnce();
     input("targetDocumentId", "20261014100000-bbbbbbb"); click("openSaved");
-    expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: "20261014100000-aaaaaaa" } }));
+    await vi.waitFor(() => expect(openTab).toHaveBeenCalledWith(expect.objectContaining({ doc: { id: "20261014100000-aaaaaaa" } })));
+  });
+
+  it("rechecks a deleted document on reopening, updates history and keeps the article available to save elsewhere", async () => {
+    vi.mocked(localizeMarkdownImages).mockResolvedValue({ markdown: article.markdown, localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValue("inserted");
+    const plugin = await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
+    fixtures.dialogs.at(-1)!.destroy();
+    vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([["20261014100000-aaaaaaa", false]]));
+    document.querySelector<HTMLButtonElement>("#entry")!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-role="saved"]')!.textContent).toContain("已删除或不可用"));
+    expect(document.querySelector<HTMLElement>('[data-action="openSaved"]')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+    expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toContain("原文");
+    await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(true));
+    click("showHistory");
+    expect(document.querySelector(".noosphere__history-entry")!.textContent).toContain("保存文档不可用");
+    historyAction("view"); input("targetDocumentId", "20261014100000-bbbbbbb");
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
+    vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([["20261014100000-bbbbbbb", true]]));
+    click("save"); await ready();
+    expect(stored()).toMatchObject({ savedDocumentId: "20261014100000-bbbbbbb", savedDocumentMissing: false });
+    expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("已保存");
+    plugin.onunload();
+  });
+
+  it("refreshes all history entries sharing a deleted document and recognizes its restoration", async () => {
+    const documentId = "20261014100000-aaaaaaa";
+    const makeDraft = (id: string): CaptureDraft => ({ version: 1, updatedAt: Date.now(), article, url: "", markdown: article.markdown,
+      reviewedMarkdown: "", imageDecisions: [], targetDocumentId: documentId, perspective: "original", savedDocumentId: documentId, historyId: id });
+    fixtures.files.set(DRAFT_STORAGE_NAME, makeDraft("first"));
+    fixtures.files.set(HISTORY_STORAGE_NAME, { version: 1, updatedAt: Date.now(), entries: ["first", "second"].map(id => ({ id, capturedAt: Date.now(), draft: makeDraft(id) })) });
+    const plugin = await launch();
+    await vi.waitFor(() => expect(checkSavedDocuments).toHaveBeenCalled());
+    vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([[documentId, false]]));
+    plugin.eventBus.emit("ws-main", { cmd: "removeDoc", code: 0, msg: "" });
+    await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(true));
+    await vi.waitFor(() => expect(history().entries.every(entry => entry.draft.savedDocumentMissing)).toBe(true));
+    vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([[documentId, true]]));
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(false));
+    expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("已保存");
+    expect(document.querySelector<HTMLElement>('[data-action="openSaved"]')!.hidden).toBe(false);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
+    plugin.onunload();
+  });
+
+  it("preserves saved state on check failure and removes refresh listeners when the dialog closes", async () => {
+    vi.mocked(localizeMarkdownImages).mockResolvedValue({ markdown: article.markdown, localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValue("inserted");
+    const plugin = await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
+    vi.mocked(checkSavedDocuments).mockRejectedValue(new Error("连接失败"));
+    window.dispatchEvent(new Event("focus"));
+    await Promise.resolve(); await Promise.resolve();
+    expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("已保存");
+    expect(stored().savedDocumentMissing).toBe(false);
+    fixtures.dialogs.at(-1)!.destroy();
+    vi.mocked(checkSavedDocuments).mockClear();
+    window.dispatchEvent(new Event("focus"));
+    plugin.eventBus.emit("ws-main", { cmd: "removeDoc", code: 0, msg: "" });
+    expect(checkSavedDocuments).not.toHaveBeenCalled();
+  });
+
+  it("rechecks before opening a saved document and keeps the workbench open if it was deleted", async () => {
+    vi.mocked(localizeMarkdownImages).mockResolvedValue({ markdown: article.markdown, localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValue("inserted");
+    await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
+    vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([["20261014100000-aaaaaaa", false]]));
+    click("openSaved");
+    await vi.waitFor(() => expect(document.querySelector('[data-role="saved"]')!.textContent).toContain("已删除或不可用"));
+    expect(openTab).not.toHaveBeenCalled();
+    expect(document.querySelector(".noosphere")).not.toBeNull();
+  });
+
+  it("ignores an old missing-document result after a new save to the same document", async () => {
+    vi.mocked(localizeMarkdownImages).mockResolvedValue({ markdown: article.markdown, localized: 0, warnings: [] });
+    vi.mocked(appendArticle).mockResolvedValue("inserted");
+    await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
+    let finish!: (result: Map<string, boolean>) => void;
+    vi.mocked(checkSavedDocuments).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    window.dispatchEvent(new Event("focus"));
+    click("editArticle"); document.querySelector('[data-role="nativeContent"]')!.textContent = "修改正文"; click("confirmArticle");
+    click("save"); await ready();
+    finish(new Map([["20261014100000-aaaaaaa", false]]));
+    await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(false));
+    expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("已保存");
   });
 
   it("retains the saved-document link after editing and allows saving the changed content", async () => {
@@ -1362,6 +1456,23 @@ describe("workbench regression", () => {
     expect(stored().markdown).toBe("已完成的审阅正文"); expect(stored().textReviewed).toBe(true);
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
     expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("自动保存失败"), 7000, "error");
+  });
+  it("discards a deleted automatic-save binding and creates a newly classified document", async () => {
+    localize(); const plugin = await launch(); await scrape(); await chooseAuto(); click("save"); await ready();
+    const deletedId = "20260101000000-eeeeeee", newId = "20260101000000-fffffff";
+    vi.mocked(checkSavedDocuments).mockImplementation(async ids => new Map(ids.filter(Boolean).map(id => [id, id !== deletedId])));
+    plugin.eventBus.emit("ws-main", { cmd: "removeDoc", code: 0, msg: "" });
+    await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(true));
+    expect(document.querySelector('[data-role="saved"]')!.textContent).toContain("可重新保存");
+    expect(document.querySelector<HTMLElement>('[data-role="status"]')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
+    vi.mocked(ensureArticleDocument).mockResolvedValueOnce({ documentId: newId, created: true, parentId: "20260101000000-bbbbbbb" });
+    click("save"); await ready();
+    expect(findArticleDocument).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), undefined);
+    expect(classifyArticle).toHaveBeenCalledTimes(2);
+    expect(stored()).toMatchObject({ savedDocumentId: newId, savedDocumentMissing: false, autoSave: { documentId: newId } });
+    expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("已保存");
+    plugin.onunload();
   });
   it("keeps successful saves when index refresh fails and retries only the index", async () => {
     localize(); vi.mocked(refreshCategoryIndex).mockRejectedValueOnce(new Error("目录失败"));
