@@ -431,13 +431,13 @@ describe("workbench regression", () => {
     fixtures.dialogs.at(-1)!.destroy();
     vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([["20261014100000-aaaaaaa", false]]));
     document.querySelector<HTMLButtonElement>("#entry")!.click();
-    await vi.waitFor(() => expect(document.querySelector('[data-role="saved"]')!.textContent).toContain("已删除或不可用"));
+    await vi.waitFor(() => expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("未保存"));
     expect(document.querySelector<HTMLElement>('[data-action="openSaved"]')!.hidden).toBe(true);
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(true);
     expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toContain("原文");
     await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(true));
     click("showHistory");
-    expect(document.querySelector(".noosphere__history-entry")!.textContent).toContain("保存文档不可用");
+    expect(document.querySelector(".noosphere__history-entry")!.textContent).toContain("未保存");
     historyAction("view"); input("targetDocumentId", "20261014100000-bbbbbbb");
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
     vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([["20261014100000-bbbbbbb", true]]));
@@ -490,7 +490,7 @@ describe("workbench regression", () => {
     await launch(); await scrape(); input("targetDocumentId", "20261014100000-aaaaaaa"); click("save"); await ready();
     vi.mocked(checkSavedDocuments).mockResolvedValue(new Map([["20261014100000-aaaaaaa", false]]));
     click("openSaved");
-    await vi.waitFor(() => expect(document.querySelector('[data-role="saved"]')!.textContent).toContain("已删除或不可用"));
+    await vi.waitFor(() => expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("未保存"));
     expect(openTab).not.toHaveBeenCalled();
     expect(document.querySelector(".noosphere")).not.toBeNull();
   });
@@ -1463,7 +1463,7 @@ describe("workbench regression", () => {
     vi.mocked(checkSavedDocuments).mockImplementation(async ids => new Map(ids.filter(Boolean).map(id => [id, id !== deletedId])));
     plugin.eventBus.emit("ws-main", { cmd: "removeDoc", code: 0, msg: "" });
     await vi.waitFor(() => expect(stored().savedDocumentMissing).toBe(true));
-    expect(document.querySelector('[data-role="saved"]')!.textContent).toContain("可重新保存");
+    expect(document.querySelector('[data-role="saved"] span')!.textContent).toBe("未保存");
     expect(document.querySelector<HTMLElement>('[data-role="status"]')!.hidden).toBe(true);
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
     vi.mocked(ensureArticleDocument).mockResolvedValueOnce({ documentId: newId, created: true, parentId: "20260101000000-bbbbbbb" });

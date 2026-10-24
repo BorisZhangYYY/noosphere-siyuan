@@ -426,11 +426,10 @@ export default class NoospherePlugin extends Plugin {
     const role = (name: string): HTMLElement => root.querySelector<HTMLElement>(`[data-role="${name}"]`)!;
     /** 已保存位置描述实际导入记录，正文改动或另选位置时仍可打开原文档。 */
     const renderSavedLocation = (): void => {
-      saved.hidden = !article || !savedDocumentId;
-      saved.querySelector("span")!.textContent = savedDocumentMissing
-        ? saveMode() === "auto" ? "原保存文档已删除或不可用，可重新保存。" : "原保存文档已删除或不可用，请重新选择保存位置。"
-        : "已保存";
-      action("openSaved").hidden = savedDocumentMissing;
+      const isSaved = !!savedDocumentId && !savedDocumentMissing;
+      saved.hidden = !article;
+      saved.querySelector("span")!.textContent = isSaved ? "已保存" : "未保存";
+      action("openSaved").hidden = !isSaved;
     };
     /** 来源与正文各自排版，正文滚动不会带走右侧保存按钮。 */
     const renderArticle = (): void => {
@@ -775,7 +774,7 @@ export default class NoospherePlugin extends Plugin {
         row.dataset.historyId = entry.id;
         const heading = document.createElement("h4"); heading.textContent = source.title;
         const info = document.createElement("p");
-        info.textContent = `${new Date(entry.capturedAt).toLocaleString()} · ${entry.draft.savedDocumentId ? entry.draft.savedDocumentMissing ? "保存文档不可用" : "已导入思源" : entry.draft.textReviewed || entry.draft.reviewedMarkdown ? "已审阅" : "待审阅"}${source.author ? ` · ${source.author}` : ""}`;
+        info.textContent = `${new Date(entry.capturedAt).toLocaleString()} · ${entry.draft.savedDocumentId ? entry.draft.savedDocumentMissing ? "未保存" : "已保存" : entry.draft.textReviewed || entry.draft.reviewedMarkdown ? "已审阅" : "待审阅"}${source.author ? ` · ${source.author}` : ""}`;
         const link = document.createElement("p"); link.className = "noosphere__history-url"; link.textContent = source.url;
         const buttons = document.createElement("div"); buttons.className = "noosphere__history-actions";
         for (const [operation, label] of [["view", "查看文章"], ["delete", "删除"]] as const) {
