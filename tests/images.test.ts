@@ -43,10 +43,21 @@ describe("image review", () => {
   it("keeps native deletion and undo in the asset inventory and clears unplaced when reinserted", () => {
     const original = imageInventory(article.markdown, article.url).map(item => ({ ...item, status: "reviewed" as const, description: "已识别", previewUrl: "/assets/local.png" }));
     const absent = syncEditedImages("编辑后的正文", article.url, original);
-    expect(absent[0]).toMatchObject({ unplaced: true, remove: false, status: "reviewed", description: "已识别" });
+    expect(absent[0]).toMatchObject({ remove: true, status: "reviewed", description: "已识别" });
     const placed = syncEditedImages("前半 ![新说明](/assets/local.png) 后半", article.url, absent);
     expect(placed).toHaveLength(1); expect(placed[0]).toMatchObject({ unplaced: false, remove: false, status: "reviewed", description: "已识别", alt: "新说明" });
     expect(syncEditedImages("正文", article.url, [{ ...original[0], remove: true }])[0].remove).toBe(true);
+  });
+  it("retains unresolved originals and keeps material order while binding native delete and undo to removal state", () => {
+    const originals = imageInventory("![a](https://example.com/a.png)\n![b](https://example.com/b.png)\n![c](https://example.com/c.png)", article.url);
+    originals[2].unplaced = true;
+    const edited = syncEditedImages("![b](https://example.com/b.png)", article.url, originals);
+    expect(edited.map(item => item.url)).toEqual(originals.map(item => item.url));
+    expect(edited.map(item => item.remove)).toEqual([true, false, false]);
+    expect(edited[2].unplaced).toBe(true);
+    const undone = syncEditedImages("![a](https://example.com/a.png)\n![b](https://example.com/b.png)", article.url, edited);
+    expect(undone.map(item => item.remove)).toEqual([false, false, false]);
+    expect(undone[2].unplaced).toBe(true);
   });
   it("preserves a source photo as unplaced after bounded link repair without starting vision requests", async () => {
     const requests = mockReview("RELEVANT");

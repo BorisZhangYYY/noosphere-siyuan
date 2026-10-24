@@ -269,7 +269,7 @@ export default class NoospherePlugin extends Plugin {
     let historyVisible = false;
     let selectedImage: ImageDecision | undefined;
     // 插入选择与大图预览独立；正文编辑重建素材时按原始地址保留选择。
-    let selectedAssetUrl: string | undefined;
+    let selectedAssetUrls: string[] = [];
     let persistDraft: (delayMs?: number) => void = () => undefined;
     let categoryManager: CategoryManager | undefined;
     const createDialog = (): Dialog => new Dialog({
@@ -574,24 +574,28 @@ export default class NoospherePlugin extends Plugin {
       if (value === null) progressBar.removeAttribute("value");
       else progressBar.value = value;
     };
-    /** 素材区共用一个插入入口，选择图片不会打开弹层或丢掉正文选区。 */
+    const selectedAssets = (): ImageDecision[] => selectedAssetUrls
+      .map(url => imageDecisions.find(item => item.url === url)).filter((item): item is ImageDecision => !!item);
+    /** 素材按点击顺序多选，统一添加/移除；更新正文不能打乱顺序或覆盖保存的选区。 */
     const updateAssetSelection = (): void => {
-      const selected = imageDecisions.find(item => item.url === selectedAssetUrl);
-      if (!selected) selectedAssetUrl = undefined;
+      const selected = selectedAssets();
+      selectedAssetUrls = selected.map(item => item.url);
       role("assetToolbar").hidden = !bodyEditing || !imageDecisions.length;
-      const insert = action("insertAsset");
-      insert.hidden = !bodyEditing;
-      insert.disabled = busy || !bodyEditing || !selected;
-      insert.setAttribute("aria-label", selected ? `插入所选图片：${selected.alt || "文章图片"}` : "插入所选图片");
+      role("assetSelectionCount").textContent = selected.length ? `已选 ${selected.length} 张` : "单击多选 · 双击预览";
+      action("addAssets").disabled = busy || !bodyEditing || !selected.length;
+      action("removeAssets").disabled = busy || !bodyEditing || !selected.some(item => !item.remove);
       imageDecisionList.querySelectorAll<HTMLButtonElement>("button[data-image-full]").forEach((button, index) => {
         const decision = imageDecisions.find(item => item.url === button.dataset.imageUrl);
         if (!decision) return;
-        const chosen = bodyEditing && decision.url === selectedAssetUrl;
+        const order = selectedAssetUrls.indexOf(decision.url);
+        const chosen = bodyEditing && order >= 0;
         button.closest(".noosphere__asset")?.classList.toggle("is-selected", chosen);
+        const badge = button.querySelector<HTMLElement>(".noosphere__asset-order")!;
+        badge.hidden = !chosen; badge.textContent = String(order + 1);
         if (bodyEditing) button.setAttribute("aria-pressed", String(chosen));
         else button.removeAttribute("aria-pressed");
         button.setAttribute("aria-label", `${bodyEditing ? "选择" : "查看"}图片 ${index + 1}：${decision.alt || "文章图片"}`);
-        button.title = bodyEditing ? "单击选择，双击预览" : decision.error || decision.description;
+        button.title = bodyEditing ? "单击选择或取消，按选择顺序添加；双击预览" : decision.error || decision.description;
         button.draggable = bodyEditing && !busy;
       });
     };
@@ -610,7 +614,6 @@ export default class NoospherePlugin extends Plugin {
       action("save").disabled = busy || bodyEditing || sourceEditing || !article || !markdown.value.trim()
         || (autoMode ? !this.settings.rootDocumentId.trim() : !target.value.trim()) || (!autoMode && savedToTarget());
       action("retryIndex").disabled = busy || !indexDocumentId;
-      action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
       updateAssetSelection();
       for (const name of ["settings", "toggleSettings", "saveClassification", "showClassification", "openSaved", "listModels", "addPerspective", "deletePerspective", "perspectiveTab", "templateTab", "addProvider", "createProvider", "cancelProvider", "deleteProvider"] as const) action(name).disabled = busy;
       for (const name of ["showCapture", "showHistory"]) action(name).disabled = busy;
@@ -678,7 +681,7 @@ export default class NoospherePlugin extends Plugin {
       const language = normalizeOutputLanguage(restored.outputLanguage);
       setDropdown("workOutputLanguage", language, false);
       progressPanel.hidden = true;
-      selectedImage = undefined; selectedAssetUrl = undefined;
+      selectedImage = undefined; selectedAssetUrls = [];
       renderSelectedImage();
       renderArticle();
       renderImageDecisions();
@@ -721,7 +724,7 @@ export default class NoospherePlugin extends Plugin {
                 if (historyId === entry.id) {
                   article = null; historyId = undefined; markdown.value = ""; reviewedMarkdown = "";
                   imageDecisions = []; reviewInfo = undefined; textReviewed = false; inputUrl.value = "";
-                  selectedImage = undefined; selectedAssetUrl = undefined; target.value = ""; savedDocumentId = ""; savedContentChanged = false;
+                  selectedImage = undefined; selectedAssetUrls = []; target.value = ""; savedDocumentId = ""; savedContentChanged = false;
                   autoSave = undefined; classification = undefined; indexDocumentId = undefined; renderSaveMode();
                   markUnsaved(); progressPanel.hidden = true;
                   persistDraft(); renderArticle(); renderImageDecisions(); renderSelectedImage();
@@ -766,7 +769,7 @@ export default class NoospherePlugin extends Plugin {
       lightbox.hidden = !selectedImage;
       if (!selectedImage || !article) return;
       role("imageTitle").textContent = selectedImage.alt || "文章图片";
-      role("imageDescription").textContent = selectedImage.unplaced ? "原图已保留，正文位置待确认。进入正文编辑后，选中待确认提示或放置光标，再单击选择素材，点击素材区的“插入”；也可拖入正文。" : selectedImage.error || selectedImage.description;
+      role("imageDescription").textContent = selectedImage.unplaced ? "原图已保留，正文位置待确认。进入正文编辑后，选中待确认提示或放置光标，再选择素材并点击“添加”；多张图片按选择顺序添加。" : selectedImage.error || selectedImage.description;
       const url = previewUrl(selectedImage.previewUrl || selectedImage.url, article.url, true);
       const image = role("imageLarge") as HTMLImageElement;
       image.alt = selectedImage.alt || "文章图片";
@@ -777,34 +780,26 @@ export default class NoospherePlugin extends Plugin {
       const source = previewUrl(selectedImage.url, article.url, true);
       link.hidden = !source;
       if (source) link.href = source;
-      action("toggleImage").hidden = !!selectedImage.unplaced;
-      action("toggleImage").textContent = selectedImage.remove ? "恢复图片" : "移除图片";
-      action("toggleImage").disabled = busy || bodyEditing || savedToTarget();
     };
-    const changeImageChoice = (decision: ImageDecision, remove: boolean): void => {
-      if (busy || bodyEditing || savedToTarget()) return;
-      reviewedMarkdown ||= markdown.value;
-      decision.remove = remove;
-      markdown.value = applyImageDecisions(reviewedMarkdown, imageDecisions);
-      if (editorState) editorState = applyEditorImageChoices(editorState, markdown.value, imageDecisions);
-      markUnsaved();
-      renderArticle();
-      renderImageDecisions();
-      renderSelectedImage();
-      persistDraft();
-      updateActions();
-    };
-    /** 统一插入入口使用正文保存的选区，不经过图片预览弹层或请求模型。 */
-    const insertAssetImage = (decision: ImageDecision): void => {
-      if (busy) return;
-      if (!bodyEditing || !nativeEditor?.insertImage(decision)) {
+    /** 批量添加共用一次原生事务，替换选区或按光标插入，保留用户选图的先后顺序。 */
+    action("addAssets").addEventListener("click", () => {
+      const decisions = selectedAssets();
+      if (busy || !bodyEditing || !decisions.length) return;
+      if (!nativeEditor?.insertImages(decisions)) {
         showMessage("请先进入正文编辑，放置光标或选中需要替换的文字。", 5000, "info"); return;
       }
+      selectedAssetUrls = []; updateAssetSelection();
       nativeEditor.focus();
-    };
-    action("insertAsset").addEventListener("click", () => {
-      const decision = imageDecisions.find(item => item.url === selectedAssetUrl);
-      if (decision) insertAssetImage(decision);
+    });
+    /** 素材批量移除同时更新原生正文；即使尚未定位，也保留原图以便重新添加。 */
+    action("removeAssets").addEventListener("click", () => {
+      const decisions = selectedAssets();
+      if (busy || !bodyEditing || !decisions.length || !nativeEditor?.removeImages(decisions)) return;
+      const removed = new Set(decisions.map(item => item.url));
+      imageDecisions = imageDecisions.map(item => removed.has(item.url) ? { ...item, remove: true } : item);
+      selectedAssetUrls = [];
+      markUnsaved(); persistDraft(); renderImageDecisions(); renderSelectedImage(); updateActions();
+      nativeEditor.focus();
     });
     const renderImageDecisions = (): void => {
       imageDecisionList.replaceChildren();
@@ -826,12 +821,13 @@ export default class NoospherePlugin extends Plugin {
         button.dataset.imageUrl = decision.url;
         button.draggable = bodyEditing && !busy;
         button.addEventListener("dragstart", event => {
-          const html = article && articleImageHTML(decision, article.url);
+          const dragging = selectedAssetUrls.includes(decision.url) ? selectedAssets() : [decision];
+          const html = article && dragging.map(item => articleImageHTML(item, article!.url)).join("\n");
           if (!bodyEditing || busy || !html || !event.dataTransfer) { event.preventDefault(); return; }
           // 标准 HTML 拖放交给思源 Protyle 的原生处理，保持落点、格式及撤销语义。
           event.dataTransfer.effectAllowed = "copy";
           event.dataTransfer.setData("text/html", html);
-          event.dataTransfer.setData("text/plain", decision.full);
+          event.dataTransfer.setData("text/plain", dragging.map(item => item.full).join("\n"));
         });
         button.setAttribute("aria-label", `查看图片 ${index + 1}：${decision.alt || "文章图片"}`);
         button.title = decision.error || decision.description;
@@ -856,11 +852,16 @@ export default class NoospherePlugin extends Plugin {
         state.textContent = decision.remove ? "已移除" : decision.unplaced ? "待定位" : status === "pending" ? "待审阅" : status === "failed" ? "识别失败" : "已审阅";
         state.className = `noosphere__asset-state is-${status}`;
         button.append(state);
+        const order = document.createElement("span");
+        order.className = "noosphere__asset-order"; order.setAttribute("aria-hidden", "true"); order.hidden = true;
+        button.append(order);
         const previewImage = (): void => { selectedImage = decision; renderSelectedImage(); action("closeImage").focus(); };
         button.addEventListener("click", () => {
           if (busy) return;
           if (!bodyEditing) { previewImage(); return; }
-          selectedAssetUrl = decision.url; updateAssetSelection();
+          selectedAssetUrls = selectedAssetUrls.includes(decision.url)
+            ? selectedAssetUrls.filter(url => url !== decision.url) : [...selectedAssetUrls, decision.url];
+          updateAssetSelection();
         });
         button.addEventListener("dblclick", () => { if (bodyEditing && !busy) previewImage(); });
         row.append(button);
@@ -875,9 +876,6 @@ export default class NoospherePlugin extends Plugin {
       Array.from(imageDecisionList.querySelectorAll<HTMLButtonElement>("button")).find(button => button.dataset.imageFull === full)?.focus();
     };
     action("closeImage").addEventListener("click", closeImage);
-    action("toggleImage").addEventListener("click", () => {
-      if (selectedImage && !selectedImage.unplaced) changeImageChoice(selectedImage, !selectedImage.remove);
-    });
     lightbox.addEventListener("click", event => { if (event.target === lightbox) closeImage(); });
     lightbox.addEventListener("keydown", event => {
       if (event.key === "Escape") { event.stopPropagation(); closeImage(); }
@@ -957,7 +955,7 @@ export default class NoospherePlugin extends Plugin {
       savedDocumentId = state.savedDocumentId;
       savedContentChanged = state.savedContentChanged || false;
       renderSavedLocation();
-      streamingMarkdown = ""; selectedImage = undefined; selectedAssetUrl = undefined;
+      streamingMarkdown = ""; selectedImage = undefined; selectedAssetUrls = [];
       renderArticle(); renderImageDecisions(); renderSelectedImage();
     };
     action("cancelReview").addEventListener("click", () => {
@@ -1628,7 +1626,7 @@ export default class NoospherePlugin extends Plugin {
         if (this.uninstalled) throw new Error("知流已卸载");
         progressPanel.hidden = true;
         article = nextArticle; editorState = undefined; bodyEdited = false;
-        selectedAssetUrl = undefined;
+        selectedAssetUrls = [];
         setDropdown("workOutputLanguage", language, false);
         target.value = ""; savedDocumentId = ""; savedContentChanged = false;
         autoSave = undefined; classification = undefined; indexDocumentId = undefined; renderSaveMode();

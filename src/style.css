@@ -132,7 +132,9 @@
 .noosphere__asset-preview { position:relative; display:block; width:100%; aspect-ratio:1; padding:0; border:0; background:transparent; cursor:pointer; }
 .noosphere__asset-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:12px; }
 .noosphere__asset-toolbar > span { color:var(--b3-theme-on-surface); font-size:11px; }
+.noosphere__asset-toolbar > div { display:flex; gap:6px; flex-shrink:0; }
 .noosphere__asset-toolbar .b3-button { min-height:28px; padding:3px 10px; font-size:12px; }
+.noosphere__asset-order { position:absolute; top:5px; right:5px; min-width:20px; height:20px; padding:0 4px; border-radius:10px; background:var(--ns-accent); color:var(--b3-theme-background); font-size:12px; line-height:20px; text-align:center; pointer-events:none; }
 .noosphere__asset img { display:block; width:100%; height:100%; object-fit:cover; }
 .noosphere__asset-missing { display:grid; align-content:center; height:100%; padding:8px; color:var(--b3-theme-on-surface); font-size:12px; }
 .noosphere__asset.is-removed img { opacity:.3; }

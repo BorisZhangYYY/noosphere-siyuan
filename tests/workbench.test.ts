@@ -64,8 +64,16 @@ vi.mock("../src/article/editor", async importOriginal => ({
     setArticle(): void {}
     focus(): void { this.content.focus(); }
     insertImage(image: { alt: string; url: string }): boolean {
+      return this.insertImages([image]);
+    }
+    insertImages(images: Array<{ alt: string; url: string }>): boolean {
       if (this.readOnly) return false;
-      this.content.textContent = (this.content.textContent || "").replace("【图片引用待确认】", `![${image.alt}](${image.url})`);
+      this.content.textContent = (this.content.textContent || "").replace("【图片引用待确认】", images.map(image => `![${image.alt}](${image.url})`).join("\n"));
+      this.flush(); return true;
+    }
+    removeImages(images: Array<{ full: string }>): boolean {
+      if (this.readOnly) return false;
+      for (const image of images) this.content.textContent = (this.content.textContent || "").replaceAll(image.full, "");
       this.flush(); return true;
     }
     isUploading(): boolean { return false; }
@@ -558,12 +566,14 @@ describe("workbench regression", () => {
     expect(document.querySelector(".noosphere__asset")!.classList.contains("is-removed")).toBe(true);
     expect(stored().markdown).not.toContain("photo.png");
     document.querySelector<HTMLButtonElement>("[data-image-full]")!.click();
-    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("恢复图片");
-    click("toggleImage");
+    expect(document.querySelector('[data-action="toggleImage"]')).toBeNull();
+    click("closeImage"); click("editArticle");
+    const content = document.querySelector('[data-role="nativeContent"]')!;
+    content.textContent += "\n【图片引用待确认】"; content.dispatchEvent(new Event("input"));
+    document.querySelector<HTMLButtonElement>("[data-image-full]")!.click(); click("addAssets");
     await vi.waitFor(() => expect(stored().markdown).toContain("photo.png"));
     expect(document.querySelector(".noosphere__asset")!.classList.contains("is-removed")).toBe(false);
-    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("移除图片");
-    click("toggleImage");
+    document.querySelector<HTMLButtonElement>("[data-image-full]")!.click(); click("removeAssets");
     await vi.waitFor(() => expect(stored().markdown).not.toContain("photo.png"));
   });
 
@@ -1231,9 +1241,9 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-role="statusText"]')?.textContent || document.body.textContent).toContain("未自动保存");
     fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>("#entry")!.click();
     expect(document.querySelector(".noosphere__asset-state")!.textContent).toBe("待定位");
-    expect(document.querySelector<HTMLButtonElement>('[data-action="insertAsset"]')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-role="assetToolbar"]')!.hidden).toBe(true);
     click("editArticle");
-    expect(document.querySelector<HTMLButtonElement>('[data-action="insertAsset"]')!.disabled).toBe(true);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="addAssets"]')!.disabled).toBe(true);
     document.querySelector('[data-role="nativeContent"]')!.textContent = "前面的文字\n\n【图片引用待确认】\n\n后面的文字";
     document.querySelector('[data-role="nativeContent"]')!.dispatchEvent(new Event("input"));
     await vi.waitFor(() => expect(stored().imageDecisions[0].unplaced).toBe(true));
@@ -1248,12 +1258,12 @@ describe("workbench regression", () => {
     expect(document.querySelector<HTMLElement>('[data-role="imageLightbox"]')!.hidden).toBe(true);
     asset.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     expect(document.querySelector<HTMLElement>('[data-role="imageLightbox"]')!.hidden).toBe(false);
-    expect(document.querySelector<HTMLButtonElement>('[data-action="toggleImage"]')!.hidden).toBe(true);
+    expect(document.querySelector('[data-action="toggleImage"]')).toBeNull();
     click("closeImage");
-    const insert = document.querySelector<HTMLButtonElement>('[data-action="insertAsset"]')!;
-    expect(insert.hidden).toBe(false);
+    const insert = document.querySelector<HTMLButtonElement>('[data-action="addAssets"]')!;
+    expect(document.querySelector<HTMLElement>('[data-role="assetToolbar"]')!.hidden).toBe(false);
     expect(insert.disabled).toBe(false);
-    expect(insert.textContent).toBe("插入");
+    expect(insert.textContent).toBe("添加");
     insert.click();
     expect(document.querySelector<HTMLElement>('[data-role="imageLightbox"]')!.hidden).toBe(true);
     await vi.waitFor(() => expect(stored().markdown).toContain("![图](https://example.com/photo.png)"));
@@ -1261,38 +1271,61 @@ describe("workbench regression", () => {
     expect(stored().markdown.indexOf("![图]")).toBeLessThan(stored().markdown.indexOf("后面的文字"));
     document.querySelector('[data-role="nativeContent"]')!.textContent = "前面的文字\n\n【图片引用待确认】\n\n后面的文字";
     document.querySelector('[data-role="nativeContent"]')!.dispatchEvent(new Event("input"));
-    await vi.waitFor(() => expect(stored().imageDecisions[0].unplaced).toBe(true));
+    await vi.waitFor(() => expect(stored().imageDecisions[0].remove).toBe(true));
     expect(reviewArticleDetailed).toHaveBeenCalledOnce();
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     expect(history().entries.some(entry => entry.draft.imageDecisions.some(item => item.url === "https://example.com/photo.png"))).toBe(true);
     click("confirmArticle");
-    expect(document.querySelector<HTMLButtonElement>('[data-action="insertAsset"]')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-role="assetToolbar"]')!.hidden).toBe(true);
   });
-  it("uses one shared insert action for the selected image and clears selection when reopening an article", async () => {
+  it("adds multiple selected assets in click order, supports deselection and clears the batch after insertion or capture", async () => {
     const images = imageInventory(article.markdown + "\n\n![第二张](https://example.com/second.png)", article.url)
       .map(item => ({ ...item, unplaced: true }));
     fixtures.files.set(DRAFT_STORAGE_NAME, { version: 1, updatedAt: Date.now(), article, url: article.url,
       markdown: "前文【图片引用待确认】后文", reviewedMarkdown: "前文【图片引用待确认】后文", imageDecisions: images,
       targetDocumentId: "", perspective: "original", savedDocumentId: "" });
     await launch(); click("editArticle");
-    expect(document.querySelectorAll('[data-action="insertAsset"]')).toHaveLength(1);
-    expect(document.querySelectorAll(".noosphere__asset button")).toHaveLength(2);
+    expect(document.querySelectorAll('[data-action="addAssets"]')).toHaveLength(1);
+    expect(document.querySelectorAll(".noosphere__asset input")).toHaveLength(0);
     const assets = document.querySelectorAll<HTMLButtonElement>("[data-image-full]");
-    assets[0].click(); assets[1].click();
-    expect(assets[0].getAttribute("aria-pressed")).toBe("false");
+    assets[1].click(); assets[0].click(); assets[1].click(); assets[1].click();
+    expect(assets[0].getAttribute("aria-pressed")).toBe("true");
     expect(assets[1].getAttribute("aria-pressed")).toBe("true");
+    expect(Array.from(document.querySelectorAll(".noosphere__asset-order"), item => item.textContent)).toEqual(["1", "2"]);
+    assets[0].click(); assets[0].click();
+    expect(Array.from(document.querySelectorAll(".noosphere__asset-order"), item => item.textContent)).toEqual(["2", "1"]);
     expect(document.querySelector<HTMLElement>('[data-role="imageLightbox"]')!.hidden).toBe(true);
-    click("insertAsset");
-    await vi.waitFor(() => expect(stored().markdown).toBe("前文![第二张](https://example.com/second.png)后文"));
-    expect(document.querySelector<HTMLButtonElement>('[data-image-url="https://example.com/second.png"]')!.getAttribute("aria-pressed")).toBe("true");
+    click("addAssets");
+    await vi.waitFor(() => expect(stored().markdown).toBe("前文![第二张](https://example.com/second.png)\n![图](https://example.com/photo.png)后文"));
+    expect(document.querySelectorAll(".noosphere__asset.is-selected")).toHaveLength(0);
+    expect(document.querySelector<HTMLButtonElement>('[data-action="addAssets"]')!.disabled).toBe(true);
+    expect(stored().imageDecisions.every(item => !item.remove && !item.unplaced)).toBe(true);
+    document.querySelector<HTMLButtonElement>("[data-image-full]")!.click();
     click("confirmArticle");
     await scrape(); click("editArticle");
-    const insert = document.querySelector<HTMLButtonElement>('[data-action="insertAsset"]')!;
-    expect(insert.disabled).toBe(true);
-    insert.click();
+    expect(document.querySelector<HTMLButtonElement>('[data-action="addAssets"]')!.disabled).toBe(true);
     expect(document.querySelectorAll(".noosphere__asset.is-selected")).toHaveLength(0);
     expect(document.querySelector('[data-role="nativeContent"]')!.textContent).toBe(article.markdown);
     expect(reviewArticleDetailed).not.toHaveBeenCalled();
+  });
+  it("removes a selected batch from the body and binds body deletion and restoration back to assets", async () => {
+    const source = article.markdown + "\n\n![第二张](https://example.com/second.png)";
+    fixtures.files.set(DRAFT_STORAGE_NAME, { version: 1, updatedAt: Date.now(), article, url: article.url,
+      markdown: source, reviewedMarkdown: source, imageDecisions: imageInventory(source, article.url),
+      targetDocumentId: "", perspective: "original", savedDocumentId: "" });
+    await launch(); click("editArticle");
+    document.querySelectorAll<HTMLButtonElement>("[data-image-full]").forEach(button => button.click());
+    click("removeAssets");
+    await vi.waitFor(() => expect(stored().imageDecisions.every(item => item.remove)).toBe(true));
+    expect(stored().markdown).not.toContain("![");
+    expect(document.querySelectorAll(".noosphere__asset.is-removed")).toHaveLength(2);
+    const content = document.querySelector('[data-role="nativeContent"]')!;
+    content.textContent = source; content.dispatchEvent(new Event("input"));
+    await vi.waitFor(() => expect(stored().imageDecisions.every(item => !item.remove)).toBe(true));
+    content.textContent = article.markdown; content.dispatchEvent(new Event("input"));
+    await vi.waitFor(() => expect(stored().imageDecisions.map(item => item.remove)).toEqual([false, true]));
+    expect(document.querySelectorAll(".noosphere__asset.is-removed")).toHaveLength(1);
+    expect(reviewArticleDetailed).not.toHaveBeenCalled(); expect(ensureArticleDocument).not.toHaveBeenCalled();
   });
   it("does not save when review fails or is cancelled", async () => {
     vi.mocked(reviewArticleDetailed).mockRejectedValueOnce(new Error("模型失败"));

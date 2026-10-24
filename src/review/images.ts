@@ -37,17 +37,18 @@ export function preserveSourceImages(decisions: ImageDecision[], source: Article
   return [...decisions, ...missing];
 }
 
-/** 原生编辑和撤销以正文为准同步位置，未放入正文的素材及既有识图判断继续保留。 */
+/** 正文与素材双向同步；原生删除标记移除，撤销恢复状态，尚未定位的原图继续保留。 */
 export function syncEditedImages(markdown: string, articleUrl: string, previous: ImageDecision[]): ImageDecision[] {
-  const matches = (old: ImageDecision, current: ImageDecision): boolean => [old.url, old.previewUrl].includes(current.url);
+  const matches = (old: ImageDecision, current: ImageDecision): boolean => [old.url, old.previewUrl]
+    .some(url => !!url && imageIdentity(resolveImageReference(url, articleUrl)) === imageIdentity(current.url));
   const present = imageInventory(markdown, articleUrl);
-  const decisions = present.map(item => {
-    const known = previous.find(old => matches(old, item));
-    return known ? { ...known, ...item, description: known.description, recommendedRemove: known.recommendedRemove,
-      remove: false, unplaced: false, status: known.status, error: known.error } : item;
+  // 素材保持原来的排列，正文插入/移除后不会使卡片跳动或打乱多选顺序。
+  const decisions = previous.map(old => {
+    const current = present.find(item => matches(old, item));
+    if (current) return { ...old, full: current.full, alt: current.alt, remove: false, unplaced: false };
+    return old.remove || old.unplaced ? old : { ...old, remove: true };
   });
-  return [...decisions, ...previous.filter(old => !present.some(item => matches(old, item)))
-    .map(item => item.remove ? item : { ...item, unplaced: true })];
+  return [...decisions, ...present.filter(item => !previous.some(old => matches(old, item)))];
 }
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */

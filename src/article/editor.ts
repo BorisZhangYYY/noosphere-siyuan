@@ -4,7 +4,7 @@ import DOMPurify from "dompurify";
 import type { Article } from "../types";
 import type { ArticleEditorState } from "./draft";
 import { composeArticle, sourceMetadata, stripSourceMetadata } from "./compose";
-import { localAssetPath } from "../images/reference";
+import { imageIdentity, localAssetPath, resolveImageReference } from "../images/reference";
 import type { ImageDecision } from "../review/images";
 import { previewUrl, type MarkdownRenderer } from "./preview";
 
@@ -161,15 +161,46 @@ export class NativeArticleEditor {
 
   /** 原生事务替换离开正文前的选区，空选区按光标插入；无有效位置时不回退到文末。 */
   insertImage(image: Pick<ImageDecision, "url" | "alt">): boolean {
+    return this.insertImages([image]);
+  }
+
+  /** 按用户选择的顺序一次插入整组图片，共用一个选区和原生撤销事务。 */
+  insertImages(images: ReadonlyArray<Pick<ImageDecision, "url" | "alt">>): boolean {
     if (this.readOnly || this.disposed) return false;
     this.rememberInsertionRange();
     const range = this.insertionRange?.cloneRange();
-    const html = articleImageHTML(image, this.article.url);
-    if (!range || !html || !this.editableRange(range)) return false;
+    const parts = images.map(image => articleImageHTML(image, this.article.url));
+    if (!range || !parts.length || parts.some(part => !part) || !this.editableRange(range)) return false;
     this.editor.protyle.toolbar!.range = range;
-    this.editor.insert(this.editor.protyle.lute!.HTML2BlockDOM(html), false, true);
+    this.editor.insert(this.editor.protyle.lute!.HTML2BlockDOM(parts.join("\n")), false, true);
     this.normalizeImages(); this.lockMetadata(); this.emit();
     this.rememberInsertionRange();
+    return true;
+  }
+
+  /** 批量移除所选素材的全部正文实例；仅更新受影响的块，保留文字、来源和原生撤销。 */
+  removeImages(images: ReadonlyArray<Pick<ImageDecision, "url" | "previewUrl">>): boolean {
+    if (this.readOnly || this.disposed || !images.length) return false;
+    this.snapshot();
+    const identity = (url: string): string => imageIdentity(resolveImageReference(url, this.article.url));
+    const targets = new Set(images.flatMap(image => [image.url, image.previewUrl].filter((url): url is string => !!url).map(identity)));
+    const affected = new Map<HTMLElement, string>();
+    for (const image of Array.from(this.content.querySelectorAll<HTMLImageElement>("img[src]"))) {
+      if (!targets.has(identity(image.getAttribute("src")!)) || image.closest(`[${METADATA}]`)) continue;
+      const block = image.closest<HTMLElement>("[data-node-id]");
+      if (!block || block === this.content) continue;
+      if (!affected.has(block)) affected.set(block, block.outerHTML);
+      (image.closest('[data-type="img"]') || image).remove();
+    }
+    if (affected.size) {
+      const operations: IOperation[] = [], undo: IOperation[] = [];
+      for (const [block, before] of affected) {
+        operations.push({ action: "update", id: block.dataset.nodeId!, data: block.outerHTML });
+        undo.push({ action: "update", id: block.dataset.nodeId!, data: before });
+      }
+      this.editor.transaction(operations, undo);
+      this.emit();
+    }
     return true;
   }
 
