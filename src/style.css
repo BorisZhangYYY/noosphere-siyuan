@@ -136,8 +136,6 @@
 .noosphere__asset img { display:block; width:100%; height:100%; object-fit:cover; }
 .noosphere__asset-missing { display:grid; align-content:center; height:100%; padding:8px; color:var(--b3-theme-on-surface); font-size:12px; }
 .noosphere__asset.is-removed img { opacity:.3; }
-.noosphere__asset label { position:absolute; top:4px; right:4px; display:flex; margin:0; padding:2px; border-radius:3px; background:var(--b3-theme-background); cursor:pointer; }
-.noosphere__asset input { margin:0; accent-color:var(--ns-accent); }
 .noosphere__asset-state { position:absolute; bottom:0; left:0; right:0; padding:3px 4px; background:var(--b3-theme-background); color:var(--b3-theme-on-surface); font-size:10px; text-align:center; opacity:.92; }
 .noosphere__asset-state.is-reviewed { color:var(--ns-accent); }
 .noosphere__asset-state.is-failed { color:var(--b3-theme-error); }

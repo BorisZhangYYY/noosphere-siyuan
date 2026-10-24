@@ -554,11 +554,17 @@ describe("workbench regression", () => {
     vi.mocked(reviewArticleDetailed).mockResolvedValueOnce({ article, markdown: "# 审阅稿\n" + decision.full, imageDecisions: [decision], imageWarnings: [], imagesReviewed: 1, metadataAccepted: [] } as never);
     await launch(); await scrape(); click("review"); await ready(); fixtures.dialogs.at(-1)!.destroy();
     document.querySelector<HTMLButtonElement>("#entry")!.click();
-    const checkbox = document.querySelector<HTMLInputElement>('[data-role="imageDecisionList"] input')!;
-    expect(checkbox.checked).toBe(true);
+    expect(document.querySelector('[data-role="imageDecisionList"] input')).toBeNull();
+    expect(document.querySelector(".noosphere__asset")!.classList.contains("is-removed")).toBe(true);
     expect(stored().markdown).not.toContain("photo.png");
-    checkbox.checked = false; checkbox.dispatchEvent(new Event("change"));
+    document.querySelector<HTMLButtonElement>("[data-image-full]")!.click();
+    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("恢复图片");
+    click("toggleImage");
     await vi.waitFor(() => expect(stored().markdown).toContain("photo.png"));
+    expect(document.querySelector(".noosphere__asset")!.classList.contains("is-removed")).toBe(false);
+    expect(document.querySelector('[data-action="toggleImage"]')!.textContent).toBe("移除图片");
+    click("toggleImage");
+    await vi.waitFor(() => expect(stored().markdown).not.toContain("photo.png"));
   });
 
   it("keeps localized content available when saving the document fails", async () => {

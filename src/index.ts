@@ -619,7 +619,7 @@ export default class NoospherePlugin extends Plugin {
       role("historyList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       role("providerList").querySelectorAll<HTMLButtonElement>("button").forEach(button => { button.disabled = busy; });
       root.querySelectorAll<HTMLButtonElement>("[data-select-trigger], [data-select-option], [data-reveal]").forEach(button => { button.disabled = busy; });
-      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy || ((bodyEditing || savedToTarget()) && !!input.closest(".noosphere__asset")); });
+      root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea").forEach(input => { input.disabled = busy; });
       for (const sourceField of [sourceAuthor, sourcePublished]) { sourceField.disabled = busy || !article || !sourceEditing; sourceField.hidden = !sourceEditing; }
       role("sourceAuthorText").hidden = sourceEditing; role("sourcePublishedText").hidden = sourceEditing;
       action("editSource").hidden = sourceEditing; action("confirmSource").hidden = !sourceEditing;
@@ -863,16 +863,7 @@ export default class NoospherePlugin extends Plugin {
           selectedAssetUrl = decision.url; updateAssetSelection();
         });
         button.addEventListener("dblclick", () => { if (bodyEditing && !busy) previewImage(); });
-        const choice = document.createElement("label");
-        choice.title = "移除图片";
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = decision.remove;
-        checkbox.disabled = busy || bodyEditing || savedToTarget();
-        checkbox.setAttribute("aria-label", `移除图片 ${index + 1}`);
-        checkbox.addEventListener("change", () => changeImageChoice(decision, checkbox.checked));
-        choice.append(checkbox);
-        row.append(button, choice);
+        row.append(button);
         imageDecisionList.append(row);
       }
       updateAssetSelection();
