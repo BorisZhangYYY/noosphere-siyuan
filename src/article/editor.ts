@@ -4,11 +4,20 @@ import DOMPurify from "dompurify";
 import type { Article } from "../types";
 import type { ArticleEditorState } from "./draft";
 import { composeArticle, sourceMetadata, stripSourceMetadata } from "./compose";
-import { localAssetPath } from "../images/reference";
+import { imageIdentity, localAssetPath, resolveImageReference } from "../images/reference";
 import type { ImageDecision } from "../review/images";
 import { previewUrl, type MarkdownRenderer } from "./preview";
 
 const METADATA = "data-noosphere-metadata";
+
+/** 素材拖放与光标插入共用安全图片 HTML，地址沿用原图而非缩略图。 */
+export function articleImageHTML(image: Pick<ImageDecision, "url" | "alt">, articleUrl: string): string | undefined {
+  const url = previewUrl(image.url, articleUrl, true);
+  if (!url) return undefined;
+  const element = document.createElement("img");
+  element.src = url; element.alt = image.alt; element.referrerPolicy = "no-referrer";
+  return element.outerHTML;
+}
 const BLOCKS = [
   ["一级标题", "heading h1", "# \u200b"], ["二级标题", "heading h2", "## \u200b"],
   ["三级标题", "heading h3", "### \u200b"], ["四级标题", "heading h4", "#### \u200b"],
@@ -82,6 +91,7 @@ export class NativeArticleEditor {
   private lastContent = "";
   private article: Article;
   private readonly host: HTMLElement;
+  private insertionRange: Range | undefined;
 
   constructor(app: App, host: HTMLElement, article: Article, markdown: string,
     state: ArticleEditorState | undefined, private readonly onChange: (state: ArticleEditorState, title: string) => void) {
@@ -114,6 +124,9 @@ export class NativeArticleEditor {
       attributeFilter: ["style", "src", "data-type", "data-subtype", "fold", "checked"] });
     this.content.addEventListener("beforeinput", this.protectMetadata, true);
     this.content.addEventListener("drop", this.moveLocalBlocks, true);
+    document.addEventListener("selectionchange", this.rememberInsertionRange);
+    this.content.addEventListener("pointerup", this.rememberInsertionRange);
+    this.content.addEventListener("keyup", this.rememberInsertionRange);
     host.addEventListener("click", this.openBlockMenu, true);
     this.renderBlocks(); this.setReadOnly(true);
   }
@@ -122,6 +135,7 @@ export class NativeArticleEditor {
   setReadOnly(readOnly: boolean): void {
     if (this.readOnly === readOnly) return;
     this.readOnly = readOnly;
+    if (readOnly) this.insertionRange = undefined;
     if (readOnly) this.editor.disable(); else this.editor.enable();
     this.content.setAttribute("data-readonly", String(readOnly));
     this.lockMetadata();
@@ -143,6 +157,51 @@ export class NativeArticleEditor {
 
   focus(): void {
     this.content.focus({ preventScroll: true });
+  }
+
+  /** 原生事务替换离开正文前的选区，空选区按光标插入；无有效位置时不回退到文末。 */
+  insertImage(image: Pick<ImageDecision, "url" | "alt">): boolean {
+    return this.insertImages([image]);
+  }
+
+  /** 按用户选择的顺序一次插入整组图片，共用一个选区和原生撤销事务。 */
+  insertImages(images: ReadonlyArray<Pick<ImageDecision, "url" | "alt">>): boolean {
+    if (this.readOnly || this.disposed) return false;
+    this.rememberInsertionRange();
+    const range = this.insertionRange?.cloneRange();
+    const parts = images.map(image => articleImageHTML(image, this.article.url));
+    if (!range || !parts.length || parts.some(part => !part) || !this.editableRange(range)) return false;
+    this.editor.protyle.toolbar!.range = range;
+    this.editor.insert(this.editor.protyle.lute!.HTML2BlockDOM(parts.join("\n")), false, true);
+    this.normalizeImages(); this.lockMetadata(); this.emit();
+    this.rememberInsertionRange();
+    return true;
+  }
+
+  /** 批量移除所选素材的全部正文实例；仅更新受影响的块，保留文字、来源和原生撤销。 */
+  removeImages(images: ReadonlyArray<Pick<ImageDecision, "url" | "previewUrl">>): boolean {
+    if (this.readOnly || this.disposed || !images.length) return false;
+    this.snapshot();
+    const identity = (url: string): string => imageIdentity(resolveImageReference(url, this.article.url));
+    const targets = new Set(images.flatMap(image => [image.url, image.previewUrl].filter((url): url is string => !!url).map(identity)));
+    const affected = new Map<HTMLElement, string>();
+    for (const image of Array.from(this.content.querySelectorAll<HTMLImageElement>("img[src]"))) {
+      if (!targets.has(identity(image.getAttribute("src")!)) || image.closest(`[${METADATA}]`)) continue;
+      const block = image.closest<HTMLElement>("[data-node-id]");
+      if (!block || block === this.content) continue;
+      if (!affected.has(block)) affected.set(block, block.outerHTML);
+      (image.closest('[data-type="img"]') || image).remove();
+    }
+    if (affected.size) {
+      const operations: IOperation[] = [], undo: IOperation[] = [];
+      for (const [block, before] of affected) {
+        operations.push({ action: "update", id: block.dataset.nodeId!, data: block.outerHTML });
+        undo.push({ action: "update", id: block.dataset.nodeId!, data: before });
+      }
+      this.editor.transaction(operations, undo);
+      this.emit();
+    }
+    return true;
   }
 
   /** 流式正文也使用当前思源编辑器的 Lute 配置和块排版。 */
@@ -170,6 +229,9 @@ export class NativeArticleEditor {
     if (this.timer) clearTimeout(this.timer);
     this.observer.disconnect(); this.content.removeEventListener("beforeinput", this.protectMetadata, true);
     this.content.removeEventListener("drop", this.moveLocalBlocks, true);
+    document.removeEventListener("selectionchange", this.rememberInsertionRange);
+    this.content.removeEventListener("pointerup", this.rememberInsertionRange);
+    this.content.removeEventListener("keyup", this.rememberInsertionRange);
     this.host.removeEventListener("click", this.openBlockMenu, true);
     this.editor.destroy();
   }
@@ -203,6 +265,21 @@ export class NativeArticleEditor {
       block.querySelectorAll("[contenteditable]").forEach(node => node.setAttribute("contenteditable", "false"));
     }
   }
+
+  private editableRange(range: Range): boolean {
+    return this.content.contains(range.startContainer) && this.content.contains(range.endContainer)
+      && !Array.from(this.content.querySelectorAll(`[${METADATA}]`)).some(node => range.intersectsNode(node));
+  }
+
+  /** 点击素材面板会改变浏览器焦点，但不能覆盖最后一次正文光标位置。 */
+  private readonly rememberInsertionRange = (): void => {
+    if (this.readOnly || this.disposed) return;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    if (this.editableRange(range)) this.insertionRange = range.cloneRange();
+    else if (this.content.contains(range.startContainer)) this.insertionRange = undefined;
+  };
 
   private readonly protectMetadata = (event: Event): void => {
     const selection = window.getSelection();

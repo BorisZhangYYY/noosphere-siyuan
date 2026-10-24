@@ -5,14 +5,13 @@ import { modelEndpoint } from "./endpoint";
 import { imageIdentity, isArticleImagePlaceholder, localAssetPath, resolveImageReference } from "../images/reference";
 import { conciseRequestError } from "../siyuan/errors";
 
-const IMAGE = /!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g;
 const IMAGE_CONCURRENCY = 2;
 const IMAGE_REVIEW_TIMEOUT_MS = 120000;
 const PROMPT = `你正在审阅文章图片。只返回 JSON：{"classification":"RELEVANT"或"PROMOTION","description":"一句简短客观的图片描述"}。
 保留代码和界面截图、技术图、图表、与正文相关的照片或插画。仅在确定图片是二维码、关注订阅图、广告横幅或无关占位装饰时标记 PROMOTION。混合内容、证据不足或无法确定时标记 RELEVANT。不要凭图片修改文章事实。`;
 
 interface ImageRef { full: string; raw: string; alt: string; url: string }
-export interface ImageDecision { full: string; alt: string; url: string; description: string; recommendedRemove: boolean; remove: boolean; status?: "pending" | "reviewed" | "failed"; error?: string; previewUrl?: string }
+export interface ImageDecision { full: string; alt: string; url: string; description: string; recommendedRemove: boolean; remove: boolean; status?: "pending" | "reviewed" | "failed"; error?: string; previewUrl?: string; unplaced?: boolean }
 export interface ImageReviewResult { decisions: ImageDecision[]; reviewed: number; warnings: string[] }
 
 /** 兼容旧草稿的文字状态，正确显示素材的审阅结果。 */
@@ -25,6 +24,31 @@ export function imageInventory(markdown: string, articleUrl: string): ImageDecis
   return [...new Map(refs(markdown, articleUrl).map(ref => [ref.full, ref])).values()].map(ref => ({
     full: ref.full, alt: ref.alt, url: ref.url, description: "未审阅，默认保留", recommendedRemove: false, remove: false, status: "pending",
   }));
+}
+
+/** 引用修复失败时把未出现在文字稿的原图保留在素材中，不推测正文位置或额外调用识图。 */
+export function preserveSourceImages(decisions: ImageDecision[], source: Article): ImageDecision[] {
+  const present = new Set(decisions.map(item => imageIdentity(item.url)));
+  const missing = imageInventory(source.markdown, source.url).filter(item => {
+    const identity = imageIdentity(item.url);
+    if (present.has(identity)) return false;
+    present.add(identity); return true;
+  }).map(item => ({ ...item, unplaced: true, description: "原图已保留，正文位置待确认。" }));
+  return [...decisions, ...missing];
+}
+
+/** 正文与素材双向同步；原生删除标记移除，撤销恢复状态，尚未定位的原图继续保留。 */
+export function syncEditedImages(markdown: string, articleUrl: string, previous: ImageDecision[]): ImageDecision[] {
+  const matches = (old: ImageDecision, current: ImageDecision): boolean => [old.url, old.previewUrl]
+    .some(url => !!url && imageIdentity(resolveImageReference(url, articleUrl)) === imageIdentity(current.url));
+  const present = imageInventory(markdown, articleUrl);
+  // 素材保持原来的排列，正文插入/移除后不会使卡片跳动或打乱多选顺序。
+  const decisions = previous.map(old => {
+    const current = present.find(item => matches(old, item));
+    if (current) return { ...old, full: current.full, alt: current.alt, remove: false, unplaced: false };
+    return old.remove || old.unplaced ? old : { ...old, remove: true };
+  });
+  return [...decisions, ...present.filter(item => !previous.some(old => matches(old, item)))];
 }
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */
@@ -63,12 +87,30 @@ export function imageReviewSettings(settings: Settings): Settings {
   return result;
 }
 
+/** 只处理展示用配图，保留围栏、缩进代码和行内代码中的图片语法示例。 */
+function mapImages(markdown: string, transform: (full: string, alt: string, raw: string) => string): string {
+  let fence: string | undefined;
+  return markdown.split(/(\r?\n)/).map((line: string): string => {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker) {
+      if (!fence) fence = marker;
+      else if (marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = undefined;
+      return line;
+    }
+    if (fence || /^(?: {4}|\t)/.test(line)) return line;
+    return line.replace(/(`+).*?\1|!\[([^\]]*)\]\((<?[^\s)]+>?)(?:\s+"[^"]*")?\)/g,
+      (full: string, code: string | undefined, alt: string, raw: string): string => code ? full : transform(full, alt, raw));
+  }).join("");
+}
+
 function refs(markdown: string, articleUrl: string): ImageRef[] {
-  return [...markdown.matchAll(IMAGE)].filter(match => !isArticleImagePlaceholder(match[2], articleUrl)).map(match => {
-    const raw = match[2].replace(/^<|>$/g, "");
-    const url = resolveImageReference(raw, articleUrl);
-    return { full: match[0], raw, alt: match[1], url };
+  const result: ImageRef[] = [];
+  mapImages(markdown, (full: string, alt: string, value: string): string => {
+    const raw = value.replace(/^<|>$/g, "");
+    if (!isArticleImagePlaceholder(raw, articleUrl)) result.push({ full, raw, alt, url: resolveImageReference(raw, articleUrl) });
+    return full;
   });
+  return result;
 }
 
 function responseText(body: string, format: Settings["modelFormat"]): string {
@@ -183,17 +225,19 @@ export async function reviewImages(article: Article, summary: string, settings: 
   return snapshot();
 }
 
-/** Restore images a text model omitted, anchored after the nearest surviving source line. */
+/** 链接已在请求边界锁定；此处只按原文位置补回文字模型遗漏的配图。 */
 export function restoreImages(markdown: string, source: Article, kept: ImageRef[] = refs(source.markdown, source.url)): string {
   let result = markdown;
+  const present = new Set(refs(result, source.url).map(image => image.url));
   const sourceLines = source.markdown.split("\n");
   for (const image of kept) {
-    if (result.includes(image.full) || (image.url && result.includes(`](${image.url})`))) continue;
+    if (present.has(image.url)) continue;
     const index = sourceLines.findIndex(line => line.includes(image.full));
     const anchor = sourceLines.slice(0, index).reverse().find(line => line.trim() && !line.includes("!["))?.trim();
     const position = anchor ? result.indexOf(anchor) : -1;
     if (position >= 0) result = `${result.slice(0, position + anchor!.length)}\n\n${image.full}${result.slice(position + anchor!.length)}`;
     else result = `${result.trimEnd()}\n\n${image.full}\n`;
+    present.add(image.url);
   }
   return result;
 }
@@ -201,5 +245,5 @@ export function restoreImages(markdown: string, source: Article, kept: ImageRef[
 /** Apply only the user's current image choices to the reviewed draft. */
 export function applyImageDecisions(markdown: string, decisions: ImageDecision[]): string {
   const removed = new Set(decisions.filter(item => item.remove).map(item => item.full));
-  return markdown.replace(IMAGE, full => removed.has(full) ? "" : full).replace(/\n{3,}/g, "\n\n");
+  return mapImages(markdown, (full: string): string => removed.has(full) ? "" : full).replace(/\n{3,}/g, "\n\n");
 }

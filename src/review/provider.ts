@@ -2,21 +2,24 @@
 import { proxyRequest, proxyStreamRequest, StreamProxyUnavailableError, ProxyTimeoutError, throwIfCancelled, type ProxyResponse } from "../siyuan/api";
 import type { Article, Settings } from "../types";
 import { buildReviewPrompt, parseReviewResult } from "./perspectives";
-import { imageReviewSettings, restoreImages, reviewImages, type ImageDecision, type ImageReviewResult } from "./images";
+import { imageInventory, imageReviewSettings, preserveSourceImages, restoreImages, reviewImages, type ImageDecision, type ImageReviewResult } from "./images";
 import { modelEndpoint } from "./endpoint";
 import { headers } from "./provider-headers";
 import { ModelReviewStream } from "./stream";
+import { lockReviewLinks } from "./links";
+import { repairReviewLinks } from "./link-repair";
 export { modelEndpoint } from "./endpoint";
 
 const REVIEW_TIMEOUT_MS = 60 * 60 * 1000;
 
-export interface ArticleReviewResult { markdown: string; article: Article; summary: string; metadataAccepted: string[]; imageDecisions: ImageDecision[]; imagesReviewed: number; imageWarnings: string[] }
+export interface ArticleReviewResult { markdown: string; article: Article; summary: string; metadataAccepted: string[]; imageDecisions: ImageDecision[]; imagesReviewed: number; imageWarnings: string[]; linkRepair?: { attempts: number; unresolved: number } }
 export interface ArticleReviewOptions {
   onTextReviewed?: (result: ArticleReviewResult) => void;
   onImageProgress?: (result: ImageReviewResult) => void;
   onTextDelta?: (response: string) => void;
   onStreamActivity?: () => void;
   onStreamFallback?: () => void;
+  onLinkRepair?: (attempt: number) => void;
   signal?: AbortSignal;
 }
 
@@ -73,7 +76,8 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
   if (settings.reviewPerspective === "raw") return { markdown: article.markdown, article, summary: "", metadataAccepted: [], imageDecisions: [], imagesReviewed: 0, imageWarnings: [] };
   const imageSettings = settings.imageReview ? imageReviewSettings(settings) : settings;
   if (!settings.modelKey.trim() || !settings.modelName.trim()) throw new Error("请配置模型 API Key 和模型名称");
-  const userContent = `来源：${article.url}\n标题：${article.title}\n抓取到的作者：${article.author || "缺失"}\n抓取到的发布时间：${article.publishedAt || "缺失"}\n\n${draftMarkdown}`;
+  const links = lockReviewLinks(`来源：${article.url}\n标题：${article.title}\n抓取到的作者：${article.author || "缺失"}\n抓取到的发布时间：${article.publishedAt || "缺失"}\n\n${draftMarkdown}`);
+  const userContent = links.input;
   const apiHeaders = headers(settings);
   let endpoint: string;
   let payload: object;
@@ -94,7 +98,10 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
   let streamedText: string | null = null;
   try {
     if (options.onTextDelta) {
-      const stream = new ModelReviewStream(settings.modelFormat, options.onTextDelta);
+      const stream = new ModelReviewStream(settings.modelFormat, (text: string): void => {
+        const preview = links.preview(text);
+        if (preview !== undefined) options.onTextDelta?.(preview);
+      });
       const streamEndpoint = settings.modelFormat === "google" ? `${endpoint.replace(/:generateContent$/, ":streamGenerateContent")}?alt=sse` : endpoint;
       const streamPayload = settings.modelFormat === "google" ? payload : { ...payload, stream: true };
       try {
@@ -140,12 +147,16 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
     if (!responseText?.trim()) throw new Error(errorText(result));
   }
   if (!responseText?.trim()) throw new Error("模型未返回审阅内容");
-  const reviewed = parseReviewResult(responseText, article, settings);
-  const markdown = restoreImages(reviewed.markdown, { ...article, markdown: draftMarkdown });
-  options.onTextReviewed?.({ markdown, article: reviewed.article, summary: reviewed.summary, metadataAccepted: reviewed.metadataAccepted, imageDecisions: [], imagesReviewed: 0, imageWarnings: [] });
+  const repaired = await repairReviewLinks(responseText, links, settings, options.signal, options.onLinkRepair);
+  const linkRepair = { attempts: repaired.attempts, unresolved: repaired.unresolved };
+  const reviewed = parseReviewResult(repaired.response, article, settings);
+  const source = { ...article, markdown: draftMarkdown };
+  const markdown = repaired.unresolved ? reviewed.markdown : restoreImages(reviewed.markdown, source);
+  const preserve = (decisions: ImageDecision[]): ImageDecision[] => repaired.unresolved ? preserveSourceImages(decisions, source) : decisions;
+  options.onTextReviewed?.({ markdown, article: reviewed.article, summary: reviewed.summary, metadataAccepted: reviewed.metadataAccepted, imageDecisions: preserve(imageInventory(markdown, article.url)), imagesReviewed: 0, imageWarnings: [], linkRepair });
   throwIfCancelled(options.signal);
   const imageResult = settings.imageReview
-    ? await reviewImages({ ...reviewed.article, markdown }, reviewed.summary, imageSettings, options.onImageProgress, options.signal)
+    ? await reviewImages({ ...reviewed.article, markdown }, reviewed.summary, imageSettings, progress => options.onImageProgress?.({ ...progress, decisions: preserve(progress.decisions) }), options.signal)
     : null;
   throwIfCancelled(options.signal);
   return {
@@ -153,9 +164,10 @@ export async function reviewArticleDetailed(article: Article, settings: Settings
     article: reviewed.article,
     summary: reviewed.summary,
     metadataAccepted: reviewed.metadataAccepted,
-    imageDecisions: imageResult?.decisions || [],
+    imageDecisions: preserve(imageResult?.decisions || imageInventory(markdown, article.url)),
     imagesReviewed: imageResult?.reviewed || 0,
     imageWarnings: imageResult?.warnings || [],
+    linkRepair,
   };
 }
 

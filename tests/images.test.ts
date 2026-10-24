@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewArticleDetailed } from "../src/review/provider";
-import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages } from "../src/review/images";
+import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages, syncEditedImages } from "../src/review/images";
 import { DEFAULT_SETTINGS, type Article, type Settings } from "../src/types";
 import { RequestCancelledError } from "../src/siyuan/api";
 
@@ -40,6 +40,65 @@ it("cancels all vision workers without marking images failed or starting more re
 });
 
 describe("image review", () => {
+  it("keeps native deletion and undo in the asset inventory and clears unplaced when reinserted", () => {
+    const original = imageInventory(article.markdown, article.url).map(item => ({ ...item, status: "reviewed" as const, description: "已识别", previewUrl: "/assets/local.png" }));
+    const absent = syncEditedImages("编辑后的正文", article.url, original);
+    expect(absent[0]).toMatchObject({ remove: true, status: "reviewed", description: "已识别" });
+    const placed = syncEditedImages("前半 ![新说明](/assets/local.png) 后半", article.url, absent);
+    expect(placed).toHaveLength(1); expect(placed[0]).toMatchObject({ unplaced: false, remove: false, status: "reviewed", description: "已识别", alt: "新说明" });
+    expect(syncEditedImages("正文", article.url, [{ ...original[0], remove: true }])[0].remove).toBe(true);
+  });
+  it("retains unresolved originals and keeps material order while binding native delete and undo to removal state", () => {
+    const originals = imageInventory("![a](https://example.com/a.png)\n![b](https://example.com/b.png)\n![c](https://example.com/c.png)", article.url);
+    originals[2].unplaced = true;
+    const edited = syncEditedImages("![b](https://example.com/b.png)", article.url, originals);
+    expect(edited.map(item => item.url)).toEqual(originals.map(item => item.url));
+    expect(edited.map(item => item.remove)).toEqual([true, false, false]);
+    expect(edited[2].unplaced).toBe(true);
+    const undone = syncEditedImages("![a](https://example.com/a.png)\n![b](https://example.com/b.png)", article.url, edited);
+    expect(undone.map(item => item.remove)).toEqual([false, false, false]);
+    expect(undone[2].unplaced).toBe(true);
+  });
+  it("preserves a source photo as unplaced after bounded link repair without starting vision requests", async () => {
+    const requests = mockReview("RELEVANT");
+    const fixture = fetch;
+    const invented = "https://example.com/pci.png";
+    vi.stubGlobal("fetch", vi.fn(async (path: RequestInfo | URL, options?: RequestInit) => {
+      const request = JSON.parse(options!.body as string);
+      if (request.method === "POST" && !JSON.stringify(request.payload).includes("aGVsbG8=")) {
+        return { ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+          title: "Example", markdown: `## 正文\n\nEvidence\n\n![wrong](${invented})\n\nEnd`, summary: "摘要",
+        }) } }] }) } }) };
+      }
+      return fixture(path, options);
+    }));
+    const accept = vi.fn();
+    const result = await reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: accept });
+    expect(result.linkRepair).toEqual({ attempts: 3, unresolved: 1 });
+    expect(result.imageDecisions).toEqual([expect.objectContaining({ unplaced: true, url: "https://example.com/pic.png" })]);
+    expect(result.markdown).not.toContain(invented);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(accept).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(0);
+    expect(article.markdown).toContain("https://example.com/pic.png");
+  });
+
+  it("keeps valid source URLs with edited captions or relative forms, including images added to the input draft", () => {
+    const source = { ...article, markdown: "Evidence\n\n![original](/pic.png)\n\n![本地](assets/local.png)" };
+    const reviewed = "Evidence\n\n![new caption](https://example.com/pic.png)\n\n![本地](/assets/local.png)";
+    expect(restoreImages(reviewed, source)).toBe(reviewed);
+  });
+
+  it("treats image syntax in code as examples rather than display images or restored image evidence", () => {
+    const example = "![example](https://example.com/example.png)";
+    const code = `\`\`\`\`md\n${example}\n\`\`\`\n${example}\n\`\`\`\`\n\n~~~md\n${example}\n~~~\n\n    ${example}\n\n\`${example}\``;
+    const markdown = `${code}\n\n${article.markdown}`;
+    expect(imageInventory(markdown, article.url)).toHaveLength(1);
+    expect(restoreImages(code, { ...article, markdown })).toContain(code);
+    expect(applyImageDecisions(markdown, [{ full: example, alt: "example", url: "https://example.com/example.png", remove: true, recommendedRemove: true, description: "移除" }])).toContain(code);
+    expect(imageInventory(restoreImages(`\`${article.markdown.match(/!\[[^\]]*\]\([^)]*\)/)![0]}\``, article), article.url)).toHaveLength(1);
+  });
+
   it("shares one decision across WeChat dimensions, tracking parameters and protocols", async () => {
     const requests = mockReview("PROMOTION");
     const source = { ...article, markdown: "![头像](http://mmbiz.qpic.cn/sz_mmbiz_png/asset/300?wx_fmt=png&wxfrom=19)\n![头像](http://mmbiz.qpic.cn/sz_mmbiz_png/asset/0?wx_fmt=png)\n![头像](https://mmbiz.qpic.cn/sz_mmbiz_png/asset/0?wx_fmt=png)" };
