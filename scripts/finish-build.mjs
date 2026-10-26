@@ -25,6 +25,7 @@ await Promise.all([
   copyFile("LICENSE", "dist/LICENSE"),
   copyMarkdown(".docs/README.en.md", "dist/docs/README.en.md"),
   copyFile(".docs/images/workbench.png", "dist/docs/images/workbench.png"),
+  copyFile(".docs/images/classify.png", "dist/docs/images/classify.png"),
   copyMarkdown(".project/development.md", "dist/project/development.md"),
   copyMarkdown("CONTRIBUTING.md", "dist/CONTRIBUTING.md"),
 ]);
