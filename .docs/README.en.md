@@ -2,82 +2,68 @@
 
 [简体中文](../README.md)
 
-Capture web articles inside SiYuan, optionally review them with AI, edit them with SiYuan's native block editor, and save the text, source metadata and images to your workspace.
-
-**Web capture requires a Firecrawl API key. AI review is optional and requires your own model service configuration.** The plugin interface is primarily in Simplified Chinese; AI output can use the source language, Simplified Chinese or English.
+Capture web articles in SiYuan, optionally review them with AI, edit them with the native editor, and automatically classify them. Save the text, sources and images to your workspace.
 
 ## Features
 
-- Capture article text, images and available source metadata from a public URL.
-- Keep the captured original or review it with a configured model, perspective, output language and article format.
-- Edit inside the existing dialog with SiYuan's native block editor. Confirming an edit keeps it in the plugin; saving imports it into a SiYuan document.
-- Optionally review images, then manually restore or remove them before saving. Downloaded images go to SiYuan's asset directory; failed downloads retain their original links.
-- Preserve source metadata in separate paragraphs and keep searchable article history with processing results and destination choices.
-- Set the actual document title when saving to an empty unnamed document. Append an article to an existing document without replacing its content.
-- Automatically classify reviewed articles using category names, paths and descriptions. Manage nested categories and keep their directories updated as documents change.
-
-Protected image and link references receive up to three short AI repair attempts if damaged. If repair still fails, the reviewed text and original image inventory are retained for manual confirmation before saving.
-
-While editing, click thumbnails to select multiple images in order, then use Add or Remove in the asset toolbar. Add inserts the images at the caret or replaces the selected text in selection order; insertion never defaults to the article's end. Remove deletes all instances of the selected images from the body while keeping the originals available for reuse. Body edits, undo and redo also update asset status. Double-click to preview while editing, or single-click in read-only mode. Image details only show a preview; native drag, formatting and draft recovery are preserved.
-
-All platforms wait five seconds before article extraction to allow dynamic content to load. WeChat captures can fill missing author and publication fields from explicit article metadata and remove reader or comment interface text. Old and new Xiaoheihe share links are normalized to article URLs, with title cleanup and recovery. Recognized article cards provide missing author and date fields; comments and recommendations are removed while article images and polls are preserved. Zhihu login or verification pages are reported as capture failures.
-
-## Requirements
-
-Requires **SiYuan 3.8.6 or later**. The declared environments are Windows, macOS and Linux desktop clients, desktop windows, and desktop browser frontends, including Docker deployments. Mobile clients and SiYuan publishing-service pages are outside the supported scope.
+- **Web capture**: Extract article text, images and available source metadata, such as the author and publication date.
+- **Review and editing**: Choose an AI review perspective, language and format, or edit the original with SiYuan's native editor.
+- **Image management**: Filter images with AI or adjust them manually. Saving attempts to download images to SiYuan's asset directory.
+- **Automatic classification**: File articles by category name, path and description, with nested categories and automatically updated directories.
+- **History**: Keep originals, processed drafts and save destinations. Search, resume editing or open saved documents at any time.
 
 ## Quick start
 
-![ZhiLiu workbench: capture at the top, article editing on the left, AI review and images on the right, and the save destination at the bottom right](https://raw.githubusercontent.com/BorisZhangYYY/noosphere-siyuan/main/.docs/images/workbench.png)
+![ZhiLiu workbench: capture at the top, edit on the left, and review, manage images and save on the right](https://raw.githubusercontent.com/BorisZhangYYY/noosphere-siyuan/main/.docs/images/workbench.png)
 
-Capture new articles at the top and read and edit the body on the left. AI review, assets and the save destination share the scrolling right sidebar. Use Settings in the top-right corner to configure services.
+1. Install and enable the plugin, then click the globe icon in SiYuan's top toolbar.
+2. Open **Settings** at the top right and enter your **Firecrawl API key**. Configure a text model and an optional vision model for AI features.
+3. Paste a URL and click **Capture Article**. To change the text, click **Edit**, then **Confirm** when finished.
+4. Optionally choose a review perspective, output language and article format, then click **AI Review**. You can also save the original directly.
+5. Under **Save Destination**, choose **Manual**, enter the **document ID** copied from SiYuan's document menu, and click **Save Article**. For automatic filing, follow the steps below.
 
-1. Open the globe icon in SiYuan's top toolbar.
-2. Configure your Firecrawl API key. Configure text and optional vision models if you want AI review.
-3. Paste a URL at the top and capture it. Inspect the article on the left; click Edit to make changes, then Confirm to keep them.
-4. Optionally choose a review perspective and output language on the right, then start AI review. Click a thumbnail to preview it in read-only mode. While editing, select images with single clicks and use Add or Remove in the asset toolbar; double-click to preview.
-5. In manual mode, copy the destination **document ID** from SiYuan, enter it at the bottom right, and save the article.
-6. Open **Classification configuration** at the far right of the workbench tabs (marked AI), then enter a **notebook or root-document ID** as the anchor and save. Select automatic classification in the article save area. Destination fields are hidden in automatic mode; change the root only in Classification configuration. Once both text and image review finish successfully, the article is classified and saved automatically. Cancellation or review failure does not save it; a failed save keeps the completed review for retry.
+## Automatic classification
 
-### Prepare categories
+Create categories first. ZhiLiu uses their names, full paths and descriptions to save reviewed articles under a suitable category.
 
-- The category list appears directly below the location in Classification configuration. Add category and Edit open a form; choose a parent using the dropdown and write a description, or generate a draft with AI. Generation uses only the current category name and parent path, focusing on its topics, scope, and typical articles without comparisons or redirection to other categories. Confirm synchronization to write the category and description to SiYuan.
-- A selected root document contains the managed directory followed by usage instructions. Open root document appears beside the root ID field under Classification location and opens the currently entered location independently of the category list. When SiYuan's top-level notebook document feature is enabled, a notebook anchor uses its own root document. Older versions or disabled notebook documents still support notebook-wide classification without creating a separate overview. Category pages are locked by default; use Category management or unlock them in SiYuan to edit the description. Renaming a marked heading preserves its identity.
-- Root and category directories recursively show all descendant documents in SiYuan's order, including articles and unmarked folders. Index pages use 📚 and bold titles; content pages use 📄 and regular titles. Titles remain native dynamic references. Root instructions use eight short bullet points. Enable automatic directory creation to append a managed index below each category introduction on its first article save. Alternatively, mark an existing list block with a nonempty `custom-zl-index` attribute. Saving or opening the document refreshes its marked index; a failed refresh can be retried separately.
-- Unmatched articles and classification-service failures save into a separate article document at the anchor root, with an explanation. Repeated saves of the same source update the existing article, even after a title change. Different sources with identical titles get separate document names; unrelated notes are preserved.
+![ZhiLiu classification configuration: set the root, enable directory maintenance, and manage category names and descriptions](https://raw.githubusercontent.com/BorisZhangYYY/noosphere-siyuan/main/.docs/images/classify.png)
 
-Perspectives and article formats apply when you start AI review. Captured articles can also be saved directly. The original-author and novice perspectives are built in, read-only and cannot be deleted; add a custom perspective to make adjustments.
+1. Open **Classification Configuration** at the far right of the workbench tabs. Enter a **notebook or root-document ID**, optionally enable **Automatically create and maintain category directories**, and click **Save**.
+2. Under **Category Management**, click **Add Category**, fill in the name, parent category and description, then click **Create and Sync**. Write the description yourself or generate it with AI; it is written to SiYuan only after you confirm synchronization.
+3. Return to **Current Article**, switch the save mode to **Automatic Classification**, and click **AI Review**. Once text and image review finish, the article is filed automatically without another save click.
 
-Choose the output language in the workbench: follow the SiYuan interface (default), keep the source language, Simplified Chinese or English. The choice belongs to the current article and is retained in its history. New articles default to the interface language; an empty workbench also lets you choose a language before capturing. You can add, rename and delete named custom providers with separate credentials and models; built-in providers cannot be deleted.
+Descriptions define what each category accepts. Edit them in Category Management or the SiYuan document; changes apply to the next classification. Only categories within the selected root are considered. If no category fits or the classification service fails, the article is saved directly under the root with an explanation.
 
-Use Save beside the Settings heading; it stays visible while scrolling and keeps you on the settings page. After the status shows saved, use Return to Workbench. Empty API keys start visible while typing; stored keys start hidden and the eye button toggles visibility.
+With directory maintenance enabled, category pages show clickable, nested directories that update when documents are created, renamed, moved or deleted. Category index pages are locked by default; unlock them from SiYuan's document menu to edit directly. Articles remain editable.
 
-Drag providers to reorder them, then save Settings to keep the order. You can also focus a provider and use Alt/Option + Up/Down.
+## Usage notes
 
-The plugin creates no extra draft documents or notebooks. Manual mode retains per-article destinations and appends imports. Automatic mode remembers the anchor and updates the same source article. Changes made after an automatic save can be saved again with Save Article.
+- **Review and language**: Follow the SiYuan interface language, keep the source language, or choose Simplified Chinese or English. Built-in perspectives are read-only; you can add custom perspectives.
+- **Images**: Click to preview in read-only mode. While editing, click to select multiple images, double-click to preview, and use **Add** or **Remove** to adjust the body. Removed originals remain available; failed downloads retain their original links.
+- **Manual saving**: **Confirm** keeps your edits in the plugin; **Save Article** writes them to SiYuan. Saving appends to an existing document or sets the title of an empty unnamed document.
+- **Automatic saving**: Saving the same source again updates the existing article. Cancellation or review failure prevents automatic saving; a failed save keeps the reviewed draft for retry. Images or links marked for confirmation must be checked before saving manually.
+- **History**: Closing the window, disabling or upgrading the plugin preserves records. If a SiYuan document is deleted, its article remains available in history for saving again.
 
-Opening an article checks whether its saved SiYuan document still exists. Existing documents show Saved with a link; deleted documents show Unsaved without a link. The article remains available for saving elsewhere or automatic classification again. Restored documents are recognized on the next check; connection failures retain the previous status.
+See the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md) for version changes.
 
-Changes between versions are recorded in the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md).
+## Requirements
+
+Requires **SiYuan 3.8.6 or later**. Supports Windows, macOS and Linux desktop clients and desktop browser frontends, including Docker deployments. Mobile clients and SiYuan publishing-service pages are not currently supported.
 
 ## Services and data
 
-Capture sends the URL to Firecrawl. AI review sends the article text to your configured text model; automatic classification also sends category paths, descriptions and an article excerpt to that model; vision review sends images and an article summary to your configured image model. Service charges and quotas are determined by the providers.
+Web capture uses Firecrawl. AI review, classification and image filtering use your configured model services, whose providers determine fees and quotas. Depending on the feature, URLs, article text, category information or images are sent to the corresponding service.
 
-Settings, API keys and article records are stored in the current workspace's plugin storage. Imported text and downloaded images are stored in SiYuan documents and assets. Closing, disabling or upgrading the plugin preserves article records.
+Settings, API keys and article records are stored in the current SiYuan workspace's plugin storage. Saved text and downloaded images are stored in SiYuan documents and assets.
 
-## Development
+## Development and feedback
 
-See [Development environment and architecture](../.project/development.md) for the project structure, processing flow and build instructions.
-
-## Feedback and contributions
-
-Report problems or suggestions through [Issues](https://github.com/BorisZhangYYY/noosphere-siyuan/issues). Read the [feedback and contribution guidelines](../CONTRIBUTING.md) before submitting.
+See [Development environment and architecture](../.project/development.md) for development details. Report problems or suggestions through [Issues](https://github.com/BorisZhangYYY/noosphere-siyuan/issues), and read the [contribution guidelines](../CONTRIBUTING.md) before contributing.
 
 Licensed under [MIT](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/LICENSE).
 
 ## Acknowledgements
 
-- [SiYuan](https://github.com/siyuan-note/siyuan) for its block editor, plugin APIs, and document and asset management.
+- [SiYuan](https://github.com/siyuan-note/siyuan) for its editor, plugin APIs and document management.
 - [Firecrawl](https://www.firecrawl.dev/) for web article and metadata extraction.
-- [siyuan-plugins-index](https://github.com/Szerelem0617/siyuan-plugins-index) for its open-source code and directory mechanism, which provided the foundation for automatically creating and updating ZhiLiu's category index directories.
+- [siyuan-plugins-index](https://github.com/Szerelem0617/siyuan-plugins-index) for open-source code and mechanisms used as a reference for category directories. No separate installation is required.
