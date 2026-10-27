@@ -1,5 +1,6 @@
 /** 自动保留工作台草稿；串行写入思源，并用同步缓存保护突然关闭的窗口。 */
 import type { Article } from "../types";
+import { validReviewCheckpoint, type ReviewCheckpoint } from "../review/checkpoint";
 import type { ImageDecision } from "../review/images";
 
 export const DRAFT_STORAGE_NAME = "capture-draft.json";
@@ -40,6 +41,8 @@ export interface CaptureDraft {
   savedContentChanged?: boolean;
   reviewInfo?: { summary: string; completedAt: string; model: string; perspective: string };
   textReviewed?: boolean;
+  /** 阶段断点不等同于文章已写入思源，恢复时不自动重复调用模型。 */
+  reviewCheckpoint?: ReviewCheckpoint;
   historyId?: string;
   /** 原生编辑的块结构与 Markdown 一起保存，颜色、块属性和引用不会因恢复而丢失。 */
   editorState?: ArticleEditorState;
@@ -52,8 +55,8 @@ export interface CaptureDraft {
 
 export interface ArticleEditorState { markdown: string; nativeMarkdown: string; blockDOM: string; fullBlockDOM?: string }
 
-/** 本次审阅开始前的临时快照，仅供进行中取消时恢复，不随草稿保存。 */
-export type ReviewSnapshot = Pick<CaptureDraft, "article" | "markdown" | "reviewedMarkdown" | "imageDecisions" | "reviewInfo" | "textReviewed" | "savedDocumentId" | "savedDocumentMissing" | "savedContentChanged" | "editorState" | "bodyEdited">;
+/** 本次审阅前的临时快照，仅供正文尚未确认时取消恢复，不随草稿保存。 */
+export type ReviewSnapshot = Pick<CaptureDraft, "article" | "markdown" | "reviewedMarkdown" | "imageDecisions" | "reviewInfo" | "textReviewed" | "reviewCheckpoint" | "savedDocumentId" | "savedDocumentMissing" | "savedContentChanged" | "editorState" | "bodyEdited">;
 
 /** 忽略损坏或不兼容的文件，避免恢复过程阻止工作台打开。 */
 export function validDraft(value: unknown): value is CaptureDraft {
@@ -63,6 +66,7 @@ export function validDraft(value: unknown): value is CaptureDraft {
     && [draft.url, draft.markdown, draft.reviewedMarkdown, draft.targetDocumentId, draft.perspective, draft.savedDocumentId].every(item => typeof item === "string")
     && Array.isArray(draft.imageDecisions)
     && (!draft.reviewInfo || [draft.reviewInfo.summary, draft.reviewInfo.completedAt, draft.reviewInfo.model, draft.reviewInfo.perspective].every(item => typeof item === "string"))
+    && (draft.reviewCheckpoint === undefined || validReviewCheckpoint(draft.reviewCheckpoint))
     && (draft.textReviewed === undefined || typeof draft.textReviewed === "boolean")
     && (draft.historyId === undefined || typeof draft.historyId === "string")
     && (draft.bodyEdited === undefined || typeof draft.bodyEdited === "boolean")

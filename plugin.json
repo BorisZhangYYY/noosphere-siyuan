@@ -2,7 +2,7 @@
   "name": "noosphere-siyuan",
   "author": "BorisZhangYYY",
   "url": "https://github.com/BorisZhangYYY/noosphere-siyuan",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minAppVersion": "3.8.6",
   "backends": [
     "windows",

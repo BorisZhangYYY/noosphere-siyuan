@@ -1,7 +1,7 @@
 /** Built-in provider profiles mirror Noosphere's supplier-first model setup. */
 import type { Settings } from "../types";
 
-export type BuiltinProviderId = "kimi_api" | "kimi_code" | "volcengine" | "minimax" | "zhipu" | "openai" | "anthropic" | "google";
+export type BuiltinProviderId = "kimi_api" | "kimi_code" | "deepseek" | "volcengine" | "minimax" | "zhipu" | "openai" | "anthropic" | "google";
 export type ProviderId = BuiltinProviderId | "custom" | `custom_${string}`;
 /** 自定义供应商使用稳定标识，改名不影响密钥和图片模型引用。 */
 export interface CustomProvider { id: ProviderId; label: string }
@@ -22,8 +22,9 @@ export interface ProviderPreset extends ModelProfile {
 export const PROVIDER_PRESETS: Record<BuiltinProviderId | "custom", ProviderPreset> = {
   kimi_api: { id: "kimi_api", label: "Kimi API", description: "月之暗面开放平台", modelFormat: "openai_chat", modelBaseUrl: "https://api.moonshot.cn/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://platform.kimi.com/console/api-keys" },
   kimi_code: { id: "kimi_code", label: "Kimi Code", description: "Kimi Code 控制台", modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelKey: "", modelName: "kimi-for-coding", modelVisionCapable: false, keyUrl: "https://www.kimi.com/code/console" },
+  deepseek: { id: "deepseek", label: "DeepSeek", description: "DeepSeek 开放平台", modelFormat: "openai_chat", modelBaseUrl: "https://api.deepseek.com/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://platform.deepseek.com/api_keys" },
   volcengine: { id: "volcengine", label: "火山引擎", description: "火山方舟模型服务", modelFormat: "openai_chat", modelBaseUrl: "https://ark.cn-beijing.volces.com/api/v3", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://ark.volcengine.com/region:cn-beijing/apikey" },
-  minimax: { id: "minimax", label: "MiniMax", description: "MiniMax 开放平台", modelFormat: "openai_chat", modelBaseUrl: "https://api.minimaxi.com/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://platform.minimax.cn/console/access?tab=api-keys" },
+  minimax: { id: "minimax", label: "MiniMax", description: "MiniMax 国内开放平台", modelFormat: "openai_chat", modelBaseUrl: "https://api.minimax.cn/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://platform.minimax.cn/console/access?tab=api-keys" },
   zhipu: { id: "zhipu", label: "智谱 AI", description: "智谱 BigModel", modelFormat: "openai_chat", modelBaseUrl: "https://open.bigmodel.cn/api/paas/v4", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://open.bigmodel.cn/usercenter/proj-mgmt/apikeys" },
   openai: { id: "openai", label: "OpenAI", description: "OpenAI 官方接口", modelFormat: "openai_responses", modelBaseUrl: "https://api.openai.com/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://platform.openai.com/api-keys" },
   anthropic: { id: "anthropic", label: "Anthropic", description: "Claude 官方接口", modelFormat: "anthropic", modelBaseUrl: "https://api.anthropic.com/v1", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "https://console.anthropic.com/settings/keys" },
@@ -31,7 +32,7 @@ export const PROVIDER_PRESETS: Record<BuiltinProviderId | "custom", ProviderPres
   custom: { id: "custom", label: "自定义", description: "兼容 OpenAI、Anthropic 或 Gemini 的接口", modelFormat: "openai_chat", modelBaseUrl: "", modelKey: "", modelName: "", modelVisionCapable: false, keyUrl: "" },
 };
 
-export const PROVIDER_ORDER: BuiltinProviderId[] = ["kimi_api", "kimi_code", "volcengine", "minimax", "zhipu", "openai", "anthropic", "google"];
+export const PROVIDER_ORDER: BuiltinProviderId[] = ["kimi_api", "kimi_code", "deepseek", "volcengine", "minimax", "zhipu", "openai", "anthropic", "google"];
 
 /** 恢复排序时去重并移除已删除供应商，新增项追加到末尾。 */
 export function orderedProviderIds(customProviders: CustomProvider[], savedOrder: readonly ProviderId[] = []): ProviderId[] {
@@ -59,7 +60,7 @@ export function providerInfo(id: ProviderId, customProviders: CustomProvider[]):
 
 export function providerMark(id: ProviderId, label: string): string {
   return isCustomProvider(id) ? Array.from(label.trim()).slice(0, 2).join("").toLocaleUpperCase()
-    : ({ kimi_api: "K", kimi_code: "C", volcengine: "火", minimax: "M", zhipu: "智", openai: "O", anthropic: "A", google: "G" } as Record<BuiltinProviderId, string>)[id as BuiltinProviderId];
+    : ({ kimi_api: "K", kimi_code: "C", deepseek: "D", volcengine: "火", minimax: "M", zhipu: "智", openai: "O", anthropic: "A", google: "G" } as Record<BuiltinProviderId, string>)[id as BuiltinProviderId];
 }
 
 /** 校验名称以免同一列表出现无法区分的供应商。 */
@@ -93,10 +94,11 @@ export function configuredProfiles(profiles: Settings["modelProfiles"]): Setting
 
 export function inferProvider(baseUrl: string): ProviderId {
   const value = baseUrl.toLowerCase();
-  if (value.includes("api.kimi.com/coding")) return "kimi_code";
-  if (value.includes("moonshot.cn")) return "kimi_api";
+  if (/api\.kimi\.(?:com|ai)\/coding/.test(value)) return "kimi_code";
+  if (value.includes("moonshot.cn") || value.includes("moonshot.ai")) return "kimi_api";
+  if (value.includes("api.deepseek.com")) return "deepseek";
   if (value.includes("volces.com") || value.includes("volcengine")) return "volcengine";
-  if (value.includes("minimaxi.com")) return "minimax";
+  if (/minimax(?:i\.com|\.cn|\.io|\.chat)/.test(value)) return "minimax";
   if (value.includes("bigmodel.cn")) return "zhipu";
   if (value.includes("api.openai.com")) return "openai";
   if (value.includes("api.anthropic.com")) return "anthropic";

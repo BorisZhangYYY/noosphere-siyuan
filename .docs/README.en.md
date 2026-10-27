@@ -22,6 +22,8 @@ Capture web articles in SiYuan, optionally review them with AI, edit them with t
 4. Optionally choose a review perspective, output language and article format, then click **AI Review**. You can also save the original directly.
 5. Under **Save Destination**, choose **Manual**, enter the **document ID** copied from SiYuan's document menu, and click **Save Article**. For automatic filing, follow the steps below.
 
+The workbench opens with an empty capture page. Open previous articles from **History** to continue editing or saving. Capture shows its current stage and elapsed time below the URL; reopening an active capture or review resumes its existing progress.
+
 ## Automatic classification
 
 Create categories first. ZhiLiu uses their names, full paths and descriptions to save reviewed articles under a suitable category.
@@ -32,15 +34,19 @@ Create categories first. ZhiLiu uses their names, full paths and descriptions to
 2. Under **Category Management**, click **Add Category**, fill in the name, parent category and description, then click **Create and Sync**. Write the description yourself or generate it with AI; it is written to SiYuan only after you confirm synchronization.
 3. Return to **Current Article**, switch the save mode to **Automatic Classification**, and click **AI Review**. Once text and image review finish, the article is filed automatically without another save click.
 
-Descriptions define what each category accepts. Edit them in Category Management or the SiYuan document; changes apply to the next classification. Only categories within the selected root are considered. If no category fits or the classification service fails, the article is saved directly under the root with an explanation.
+Descriptions define what each category accepts. Edit them in Category Management or the SiYuan document; changes apply to the next classification. Only categories within the selected root are considered. If no category fits, the article is saved directly under the root. If the model is rate-limited, unavailable, or times out, the draft is retained and saving switches to a manually specified destination.
 
 With directory maintenance enabled, category pages show clickable, nested directories that update when documents are created, renamed, moved or deleted. Category index pages are locked by default; unlock them from SiYuan's document menu to edit directly. Articles remain editable.
 
 ## Usage notes
 
 - **Review and language**: Follow the SiYuan interface language, keep the source language, or choose Simplified Chinese or English. Built-in perspectives are read-only; you can add custom perspectives.
-- **Images**: Click to preview in read-only mode. While editing, click to select multiple images, double-click to preview, and use **Add** or **Remove** to adjust the body. Removed originals remain available; failed downloads retain their original links.
+- **Thinking and waiting**: MiniMax, Kimi Code, and DeepSeek reasoning events are distinguished from article text and heartbeats. Ongoing reasoning or text extends the streaming deadline; ten minutes without generation progress ends the request even if heartbeats continue. A ninety-second silence only warns. Non-streaming requests retain a roughly ten-minute limit. Thinking content is excluded from articles.
+- **Images**: Click to preview in read-only mode. While editing, click to select multiple images, double-click to preview, and use **Add** or **Remove** to adjust the body. Removed originals remain available. An individual broken, inaccessible, HTML, or unsupported image retains its original link without blocking review or saving; you do not need to remove it.
+- **Review stages and recovery**: The compact text → images list provides separate controls to re-review text or continue unfinished images. Reopen the article from History after an interruption and continue only unfinished images. Completed text and image decisions are retained; an incomplete text response retries the text stage.
+- **Cancel review**: Before text review finishes, cancellation restores the previous draft. After text review finishes, cancellation only stops the remaining image review, keeping the text and completed image decisions for manual saving.
 - **Manual saving**: **Confirm** keeps your edits in the plugin; **Save Article** writes them to SiYuan. Saving appends to an existing document or sets the title of an empty unnamed document.
+- **Service errors**: Model and SiYuan write failures stop the operation immediately and show the code and reason. Image-source rate limits, server failures, and network interruptions also stop processing. Completed text, image decisions, and uploaded assets remain available for retry. Classification failures switch saving to a manually specified destination.
 - **Automatic saving**: Saving the same source again updates the existing article. Cancellation or review failure prevents automatic saving; a failed save keeps the reviewed draft for retry. Images or links marked for confirmation must be checked before saving manually.
 - **History**: Closing the window, disabling or upgrading the plugin preserves records. If a SiYuan document is deleted, its article remains available in history for saving again.
 
@@ -67,3 +73,5 @@ Licensed under [MIT](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main
 - [SiYuan](https://github.com/siyuan-note/siyuan) for its editor, plugin APIs and document management.
 - [Firecrawl](https://www.firecrawl.dev/) for web article and metadata extraction.
 - [siyuan-plugins-index](https://github.com/Szerelem0617/siyuan-plugins-index) for open-source code and mechanisms used as a reference for category directories. No separate installation is required.
+
+Requests have bounded defaults: classification 30 seconds; text review warns after 90 seconds without any data (reasoning and heartbeats count as activity) and has a 10-minute request deadline; image review 60 seconds; image transfers 30 seconds and localization 2 minutes per batch. Timeouts release the workbench and preserve completed results.

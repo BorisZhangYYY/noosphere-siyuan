@@ -1,5 +1,6 @@
 /** Review viewpoints and free-form article-format instructions. */
 import { composeArticle } from "../article/compose";
+import { throwIfServiceError } from "../siyuan/errors";
 import { outputLanguagePrompt } from "./language";
 import type { Article, ReviewPerspective, Settings } from "../types";
 
@@ -145,6 +146,7 @@ export function parseReviewResult(response: string, article: Article, settings: 
   let parsed: { title?: unknown; markdown?: unknown; summary?: unknown; metadata_candidates?: Record<string, unknown> };
   try { parsed = JSON.parse(candidate) as typeof parsed; }
   catch { throw new Error("AI 没有返回有效的审阅 JSON，请重试或调整模型输出长度"); }
+  throwIfServiceError(parsed);
   if (!parsed || typeof parsed.title !== "string" || !parsed.title.trim() || typeof parsed.markdown !== "string" || !parsed.markdown.trim()) throw new Error("AI 审阅结果缺少标题或正文");
   if (typeof parsed.summary !== "string" || !parsed.summary.trim()) throw new Error("AI 审阅结果缺少供图片判断使用的摘要，请重试");
   const source = article.markdown.replace(/\s+/g, " ").toLocaleLowerCase();

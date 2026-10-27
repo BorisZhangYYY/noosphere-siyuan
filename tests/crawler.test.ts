@@ -23,6 +23,14 @@ function mockScrape(markdown = "文章正文"): ReturnType<typeof vi.fn> {
 }
 
 describe("通用抓取策略", () => {
+  it("报告实际抓取和正文整理阶段，不提供估算百分比", async () => {
+    mockScrape();
+    const stages = vi.fn();
+    const pending = scrapeWithFirecrawl("https://example.com/article", "test-key", stages);
+    expect(stages.mock.calls).toEqual([["fetching"]]);
+    await pending;
+    expect(stages.mock.calls).toEqual([["fetching"], ["processing"]]);
+  });
   it.each([
     "https://example.com/article?ref=share#正文",
     "https://mp.weixin.qq.com/s/article",

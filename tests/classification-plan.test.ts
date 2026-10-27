@@ -1,6 +1,6 @@
 /** 模型执行与图片下载期间，用户删除或修改分类规则时必须重新决策。 */
-import { beforeEach, expect, it, vi } from "vitest";
-import { prepareClassification, validateClassification } from "../src/review/classification-plan";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ClassificationUnavailableError, prepareClassification, validateClassification } from "../src/review/classification-plan";
 import { locateDocument } from "../src/siyuan/location";
 import { discoverCategories } from "../src/siyuan/tree";
 import { classifyArticle } from "../src/review/classify";
@@ -38,4 +38,24 @@ it('stops if the rules keep changing, instead of using a stale destination', asy
   vi.mocked(discoverCategories).mockImplementation(async () => [{ ...category, description: String(changes++) }]);
   await expect(prepareClassification('root', article, '正文', DEFAULT_SETTINGS)).rejects.toThrow('发生变化');
   expect(classifyArticle).toHaveBeenCalledTimes(2);
+});
+
+afterEach(() => vi.useRealTimers());
+it('releases a classification that ignores cancellation and discards the late decision', async () => {
+  vi.useFakeTimers(); let finish!: (value: any) => void;
+  vi.mocked(classifyArticle).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const pending = prepareClassification('root', article, '正文', DEFAULT_SETTINGS);
+  const assertion = expect(pending).rejects.toBeInstanceOf(ClassificationUnavailableError);
+  await vi.advanceTimersByTimeAsync(30000); await assertion;
+  expect(vi.mocked(classifyArticle).mock.calls[0][4]?.signal?.aborted).toBe(true);
+  const reads = vi.mocked(discoverCategories).mock.calls.length;
+  finish({ categoryId: 'category', confidence: 1, reason: 'late' });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(discoverCategories).toHaveBeenCalledTimes(reads);
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('reports unavailable models instead of silently classifying to the root', async () => {
+  vi.mocked(classifyArticle).mockRejectedValueOnce(new Error('HTTP 429 quota exceeded'));
+  await expect(prepareClassification('root', article, '正文', DEFAULT_SETTINGS)).rejects.toThrow('429');
+  expect(classifyArticle).toHaveBeenCalledOnce();
 });

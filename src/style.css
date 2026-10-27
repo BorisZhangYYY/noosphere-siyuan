@@ -38,6 +38,7 @@
 /* 正文与信息栏独立滚动，保存位置随右栏内容一起滚动。 */
 .noosphere__workbench { display:flex; flex-direction:column; overflow:hidden; padding:20px; }
 .noosphere__capture { flex:none; }
+.noosphere__capture-progress { margin-top:12px; }
 /* 历史视图与阅读区共用工作台高度，文章列表独立滚动。 */
 .noosphere__work-tabs { display:flex; flex:none; gap:6px; margin-bottom:14px; padding-bottom:10px; border-bottom:1px solid var(--ns-border); }
 .noosphere__work-tabs button { padding:8px 14px; border:0; border-radius:7px; background:transparent; color:var(--b3-theme-on-surface); font:inherit; cursor:pointer; }
@@ -106,6 +107,9 @@
 .noosphere__metadata-input { width:100%; min-width:0; height:34px; margin:0; padding:6px 8px; border:1px solid var(--ns-border); border-radius:7px; background:var(--b3-theme-background); color:var(--b3-theme-on-background); font:inherit; font-size:13px; line-height:20px; transition:none; }
 .noosphere__metadata-input:focus { border-color:var(--ns-accent); outline:2px solid var(--ns-soft); outline-offset:1px; }
 .noosphere__source-time { grid-column:1 / -1; }
+/* 时间独占整行，较长的发布时间在只读状态下完整换行。 */
+.noosphere__source-time dd.noosphere__source-field { height:auto; }
+.noosphere__source-time .noosphere__source-field > span { height:auto; white-space:normal; }
 .noosphere__source a { font-size:13px; text-decoration:none; }
 .noosphere__source-actions { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .noosphere__source-actions button { width:48px; min-height:32px; margin-left:auto; font-size:12px; }
@@ -114,18 +118,18 @@
 .noosphere__review-actions .noosphere__field { width:100%; margin:0; }
 .noosphere__review-actions .b3-button { width:100%; }
 .noosphere__review-actions [data-action="cancelReview"] { color:var(--b3-theme-error); }
-.noosphere__review-progress { display:grid; gap:7px; }
-.noosphere__review-progress > div { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--b3-theme-on-surface); font-size:12px; }
+.noosphere__review-progress,.noosphere__capture-progress { display:grid; gap:7px; }
+.noosphere__review-progress > div,.noosphere__capture-progress > div { display:flex; align-items:center; justify-content:space-between; gap:8px; color:var(--b3-theme-on-surface); font-size:12px; }
 .noosphere__review-progress strong { font-weight:600; white-space:nowrap; }
-.noosphere__review-progress progress { width:100%; height:6px; overflow:hidden; border:0; border-radius:99px; background:var(--ns-soft); accent-color:var(--ns-accent); }
-.noosphere__review-progress progress::-webkit-progress-bar { background:var(--ns-soft); border-radius:99px; }
-.noosphere__review-progress progress::-webkit-progress-value { background:var(--ns-accent); border-radius:99px; transition:width .3s ease; }
+.noosphere__review-progress progress,.noosphere__capture-progress progress { width:100%; height:6px; overflow:hidden; border:0; border-radius:99px; background:var(--ns-soft); accent-color:var(--ns-accent); }
+.noosphere__review-progress progress::-webkit-progress-bar,.noosphere__capture-progress progress::-webkit-progress-bar { background:var(--ns-soft); border-radius:99px; }
+.noosphere__review-progress progress::-webkit-progress-value,.noosphere__capture-progress progress::-webkit-progress-value { background:var(--ns-accent); border-radius:99px; transition:width .3s ease; }
 .noosphere__review-progress.is-failed progress { accent-color:var(--b3-theme-error); }
 .noosphere__review-progress.is-failed progress::-webkit-progress-value { background:var(--b3-theme-error); }
-.noosphere__review-progress progress:indeterminate { background:linear-gradient(90deg,var(--ns-soft) 20%,var(--ns-accent) 50%,var(--ns-soft) 80%); background-size:200% 100%; animation:noosphere-review-wait 1.5s linear infinite; }
-.noosphere__review-progress progress:indeterminate::-webkit-progress-bar { background:transparent; }
+.noosphere__review-progress progress:indeterminate,.noosphere__capture-progress progress:indeterminate { background:linear-gradient(90deg,var(--ns-soft) 20%,var(--ns-accent) 50%,var(--ns-soft) 80%); background-size:200% 100%; animation:noosphere-review-wait 1.5s linear infinite; }
+.noosphere__review-progress progress:indeterminate::-webkit-progress-bar,.noosphere__capture-progress progress:indeterminate::-webkit-progress-bar { background:transparent; }
 @keyframes noosphere-review-wait { from { background-position:200% 0; } to { background-position:0 0; } }
-@media (prefers-reduced-motion:reduce) { .noosphere__review-progress progress:indeterminate { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .noosphere__review-progress progress:indeterminate,.noosphere__capture-progress progress:indeterminate { animation:none; } }
 .noosphere__asset-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:12px; }
 .noosphere__asset { position:relative; min-width:0; border:1px solid var(--ns-border); border-radius:7px; overflow:hidden; background:var(--ns-soft); }
 .noosphere__asset.is-selected { border-color:var(--ns-accent); box-shadow:0 0 0 1px var(--ns-accent); }
@@ -139,7 +143,7 @@
 .noosphere__asset-missing { display:grid; align-content:center; height:100%; padding:8px; color:var(--b3-theme-on-surface); font-size:12px; }
 .noosphere__asset.is-removed img { opacity:.3; }
 .noosphere__asset-state { position:absolute; bottom:0; left:0; right:0; padding:3px 4px; background:var(--b3-theme-background); color:var(--b3-theme-on-surface); font-size:10px; text-align:center; opacity:.92; }
-.noosphere__asset-state.is-reviewed { color:var(--ns-accent); }
+.noosphere__asset-state.is-reviewed,.noosphere__asset-state.is-added { color:var(--ns-accent); }
 .noosphere__asset-state.is-failed { color:var(--b3-theme-error); }
 .noosphere__save-card { box-shadow:0 -3px 12px rgba(0,0,0,.035); }
 .noosphere__save-card label { font-size:12px; }
@@ -308,3 +312,32 @@
 .noosphere__category-form .noosphere__category-status { margin-top:12px; }
 
 .noosphere .noosphere__category-location > label.noosphere__vision-option { margin-top:16px !important; }
+
+/* 紧凑纵向流程沿用思源主题；阶段状态、进度和操作各只出现一次。 */
+.noosphere__review-card .noosphere__rail-title { margin-bottom:12px; }
+.noosphere__review-card [data-role="reviewInfo"] { margin-left:auto; color:var(--b3-theme-on-surface); font-size:11px; white-space:nowrap; }
+.noosphere__review-pipeline { padding:0; margin:0; list-style:none; }
+.noosphere__review-pipeline > li { display:grid; grid-template-columns:22px minmax(0,1fr) auto; align-items:start; gap:9px; padding:8px 0 14px; position:relative; min-width:0; }
+.noosphere__review-pipeline > li:first-child::after { content:""; position:absolute; left:10px; top:34px; bottom:-3px; width:1px; background:var(--ns-border); }
+.noosphere__review-pipeline > li + li { padding-top:10px; }
+.noosphere__stage-number { display:grid; place-items:center; width:22px; height:22px; border:1px solid var(--ns-border); border-radius:50%; font-size:12px; color:var(--b3-theme-on-surface); background:var(--b3-theme-background); }
+.noosphere__review-pipeline [data-state="running"] .noosphere__stage-number { border-color:var(--ns-accent); color:var(--ns-accent); }
+.noosphere__review-pipeline [data-state="complete"] .noosphere__stage-number { color:var(--b3-theme-on-primary); background:var(--ns-accent); border-color:var(--ns-accent); }
+.noosphere__stage-content { min-width:0; }
+.noosphere__stage-heading { display:flex; align-items:center; flex-wrap:wrap; column-gap:8px; row-gap:3px; min-height:24px; }
+.noosphere__stage-heading strong { font-size:13px; }
+.noosphere__stage-heading [data-role$="StageState"] { font-size:11px; line-height:19px; color:var(--b3-theme-on-surface); }
+.noosphere__stage-meter { display:grid; gap:5px; margin-top:5px; font-size:11px; color:var(--b3-theme-on-surface); }
+.noosphere__stage-meter progress { width:100%; height:4px; border:0; border-radius:99px; overflow:hidden; background:var(--ns-soft); accent-color:var(--ns-accent); }
+.noosphere__stage-meter progress::-webkit-progress-bar { background:var(--ns-soft); }
+.noosphere__stage-meter progress::-webkit-progress-value { background:var(--ns-accent); border-radius:99px; transition:width .3s ease; }
+.noosphere__review-actions .noosphere__stage-actions .b3-button { width:auto; min-height:28px; padding:3px 8px; font-size:12px; white-space:nowrap; }
+.noosphere__stage-actions { display:flex; align-items:center; gap:4px; }
+.noosphere__review-options { display:grid; gap:7px; border-top:1px solid var(--ns-border); padding-top:12px; }
+.noosphere__review-options .noosphere__field { display:grid; grid-template-columns:64px minmax(0,1fr); align-items:center; gap:8px; }
+.noosphere__review-options .noosphere__field-label { margin:0; font-size:12px; }
+.noosphere__review-options .noosphere__dropdown-trigger { min-height:32px; padding:5px 9px; font-size:12px; }
+.noosphere__review-actions [data-role="reviewRecovery"] { margin:0; font-size:12px; line-height:1.5; }
+.noosphere__review-card .noosphere__review-progress { gap:4px; }
+.noosphere__review-card .noosphere__review-progress progress { height:4px; }
+.noosphere__review-card [data-role="reviewProgressLabel"] { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

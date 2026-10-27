@@ -11,20 +11,21 @@ const noviceResponse = JSON.stringify({ title: "Reviewed article", markdown: "##
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("model review adapters", () => {
-  it("allows a long Kimi Code review to finish after thirty minutes", async () => {
+  it("bounds a non-streaming long review even when the host ignores abort", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("fetch", vi.fn(async (_path: string, options: RequestInit) => {
+    let signal!: AbortSignal;
+    vi.stubGlobal("fetch", vi.fn((_path: string, options: RequestInit) => {
       const request = JSON.parse(options.body as string);
-      expect(request.timeout).toBe(3600000);
+      expect(request.timeout).toBe(600000);
       expect(request.payload.max_tokens).toBe(32768);
-      await new Promise(resolve => setTimeout(resolve, 1801000));
-      return { ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: originalResponse }] }) } }) };
+      signal = options.signal as AbortSignal;
+      return new Promise(() => undefined);
     }));
     const source = { ...article, markdown: "正文".repeat(12000) };
-    let finished = false;
-    const review = reviewArticle(source, { ...DEFAULT_SETTINGS, activeProvider: "kimi_code", modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" }).then(result => { finished = true; return result; });
-    await vi.advanceTimersByTimeAsync(1800000); expect(finished).toBe(false);
-    await vi.advanceTimersByTimeAsync(1000); expect(await review).toContain("## 正文");
+    const pending = reviewArticle(source, { ...DEFAULT_SETTINGS, activeProvider: "kimi_code", modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" });
+    const assertion = expect(pending).rejects.toThrow("审阅请求超时");
+    await vi.advanceTimersByTimeAsync(605000); await assertion;
+    expect(signal.aborted).toBe(true); expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["anthropic", "openai_chat", "openai_responses", "google"] as const)("rejects an explicitly truncated %s response before accepting its JSON", async modelFormat => {
@@ -37,9 +38,9 @@ describe("model review adapters", () => {
     expect(article.markdown).toBe("# Article\nBody");
   });
 
-  it("explains a model timeout without labelling it as truncated output", async () => {
+  it("reports a coded server timeout with its original code and diagnosis", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 1, msg: "API timeout", data: null }) })));
-    await expect(reviewArticle(article, { ...DEFAULT_SETTINGS, modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" })).rejects.toThrow("审阅请求超时");
+    await expect(reviewArticle(article, { ...DEFAULT_SETTINGS, modelFormat: "anthropic", modelBaseUrl: "https://api.kimi.com/coding/", modelName: "kimi-for-coding", modelKey: "test" })).rejects.toMatchObject({ code: 1, message: expect.stringContaining("API timeout") });
   });
 
   it("accepts free-form article structure without slot variables or a visible summary", () => {

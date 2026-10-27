@@ -1,7 +1,10 @@
 /** 分类、分类描述与审阅引用修复共用四种模型协议的短文本请求。 */
 import { proxyRequest } from "../siyuan/api";
+import { MODEL_SHORT_TIMEOUT_MS } from "../siyuan/timeouts";
+import { throwIfServiceError } from "../siyuan/errors";
 import { modelEndpoint } from "./endpoint";
 import { headers } from "./provider-headers";
+import { chatResponseContent, reasoningRequestOptions } from "./reasoning";
 import type { Settings } from "../types";
 
 function classifyOutputTokens(markdown: string): number {
@@ -35,29 +38,30 @@ function requestShape(settings: Settings, systemPrompt: string, userMessage: str
   }
   return {
     endpoint: modelEndpoint(settings.modelBaseUrl, "/chat/completions", settings.modelFormat),
-    payload: { model: settings.modelName.trim(), temperature: 0.1, max_tokens: maxTokens, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }] },
+    payload: { model: settings.modelName.trim(), temperature: 0.1, max_tokens: maxTokens, ...reasoningRequestOptions(settings), messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userMessage }] },
   };
 }
 
 interface ChatCompletion { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }> }
 interface AnthropicMessage { content?: Array<{ type?: string; text?: string }> }
 interface OpenAIResponse { output_text?: string; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> }
-interface GeminiResponse { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }
+interface GeminiResponse { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> }
 
 function responseText(settings: Settings, body: string): string {
   const result = JSON.parse(body) as ChatCompletion & AnthropicMessage & OpenAIResponse & GeminiResponse;
+  throwIfServiceError(result);
   if (settings.modelFormat === "anthropic") return (result.content || []).filter(part => part.type === "text").map(part => part.text || "").join("\n");
   if (settings.modelFormat === "openai_responses") {
     return result.output_text
       || (result.output || []).flatMap(item => item.content || []).filter(part => part.type === "output_text").map(part => part.text || "").join("\n");
   }
-  if (settings.modelFormat === "google") return (result.candidates?.[0]?.content?.parts || []).map(part => part.text || "").join("\n");
+  if (settings.modelFormat === "google") return (result.candidates?.[0]?.content?.parts || []).filter(part => !part.thought).map(part => part.text || "").join("\n");
   const content = result.choices?.[0]?.message?.content;
-  return typeof content === "string" ? content : (content || []).filter(part => part.type === "text").map(part => part.text || "").join("\n");
+  return chatResponseContent(content);
 }
 
 /** 只返回文字，不触发分类创建或任何思源写入。 */
-export async function requestShortText(settings: Settings, systemPrompt: string, userMessage: string, signal?: AbortSignal, outputTokens?: number, timeoutMs = 120000): Promise<string> {
+export async function requestShortText(settings: Settings, systemPrompt: string, userMessage: string, signal?: AbortSignal, outputTokens?: number, timeoutMs = MODEL_SHORT_TIMEOUT_MS): Promise<string> {
   if (!settings.modelKey.trim() || !settings.modelName.trim()) throw new Error("请先配置模型 API Key 和模型名称");
   const { endpoint, payload } = requestShape(settings, systemPrompt, userMessage, outputTokens);
   const response = await proxyRequest(endpoint, "POST", headers(settings), payload, "text", timeoutMs, signal);
