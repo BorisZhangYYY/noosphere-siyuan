@@ -108,7 +108,7 @@ describe("streaming article review", () => {
   it("does not retry a supplier's 404 or a rate limit", async () => {
     const fetchMock = vi.fn(async () => new Response('{"error":{"message":"model missing"}}', { status: 404, headers: { "Siyuan-Proxy-Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(reviewArticleDetailed(article, settings("openai_chat"), article.markdown, { onTextDelta: vi.fn() })).rejects.toThrow("model missing");
+    await expect(reviewArticleDetailed(article, settings("openai_chat"), article.markdown, { onTextDelta: vi.fn() })).rejects.toMatchObject({ code: 404 });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -118,14 +118,118 @@ describe("streaming article review", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it("aborts the connection at five minutes and releases the timeout", async () => {
+  it("aborts a silent connection at ninety seconds and releases both timers", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn((_path: string, options: RequestInit) => new Promise((_resolve, reject) => {
       options.signal!.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
     })));
     const request = proxyStreamRequest("https://model.example", {}, {}, vi.fn());
     const assertion = expect(request).rejects.toBeInstanceOf(ProxyTimeoutError);
-    await vi.advanceTimersByTimeAsync(300000); await assertion; expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(90000); await assertion; expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases a stalled stream without waiting for its unresponsive cancellation", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(stream) { stream.enqueue(new TextEncoder().encode("first")); },
+      cancel() { return new Promise(() => undefined); },
+    }))));
+    const progress = vi.fn(), pending = proxyStreamRequest("https://model.example", {}, {}, progress);
+    const assertion = expect(pending).rejects.toMatchObject({ timeoutMs: 90000 });
+    await vi.advanceTimersByTimeAsync(0); expect(progress).toHaveBeenCalledWith("first");
+    await vi.advanceTimersByTimeAsync(90000); await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps an active long stream alive while resetting only the idle deadline", async () => {
+    vi.useFakeTimers(); let stream!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }))));
+    const pending = proxyStreamRequest("https://model.example", {}, {}, vi.fn(), 600000);
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(60000);
+      stream.enqueue(new TextEncoder().encode("chunk")); await vi.advanceTimersByTimeAsync(0);
+    }
+    stream.close(); expect(await pending).toBe("chunk".repeat(4));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["openai_chat", "openai_responses", "anthropic", "google"] as const)("keeps %s reasoning activity alive without body content", async format => {
+    vi.useFakeTimers(); let stream!: ReadableStreamDefaultController<Uint8Array>, signal!: AbortSignal;
+    vi.stubGlobal("fetch", vi.fn(async (_path, options: RequestInit) => {
+      signal = options.signal as AbortSignal;
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }));
+    }));
+    const slow = vi.fn(), content = vi.fn(), accepted = vi.fn();
+    const pending = reviewArticleDetailed(article, settings(format), article.markdown, { onTextDelta: content, onSlowResponse: slow, onTextReviewed: accepted });
+    await vi.advanceTimersByTimeAsync(0);
+    const thinking = format === "anthropic" ? { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "internal reasoning" } }
+      : format === "openai_responses" ? { type: "response.reasoning_summary_text.delta", delta: "internal reasoning" }
+        : format === "google" ? { candidates: [{ content: { parts: [{ thought: true, text: "internal reasoning" }] } }] }
+          : { choices: [{ index: 0, delta: { reasoning_content: "internal reasoning" } }] };
+    for (let i = 0; i < 4; i++) {
+      await vi.advanceTimersByTimeAsync(60000);
+      stream.enqueue(new TextEncoder().encode(event(thinking))); await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(slow).not.toHaveBeenCalled(); expect(content).not.toHaveBeenCalled();
+    expect(accepted).not.toHaveBeenCalled(); expect(signal.aborted).toBe(false);
+    stream.enqueue(new TextEncoder().encode(protocol(format))); stream.close();
+    expect((await pending).markdown).toContain("## 正文"); expect(accepted).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("warns after silence without aborting a model that is still working", async () => {
+    vi.useFakeTimers(); let stream!: ReadableStreamDefaultController<Uint8Array>, signal!: AbortSignal;
+    vi.stubGlobal("fetch", vi.fn(async (_path, options: RequestInit) => {
+      signal = options.signal as AbortSignal;
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }));
+    }));
+    const slow = vi.fn(), content = vi.fn();
+    const pending = reviewArticleDetailed(article, settings("anthropic"), article.markdown, { onTextDelta: content, onSlowResponse: slow });
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(slow).toHaveBeenCalledOnce(); expect(signal.aborted).toBe(false); expect(content).not.toHaveBeenCalled();
+    stream.enqueue(new TextEncoder().encode(protocol("anthropic"))); stream.close();
+    expect((await pending).markdown).toContain("## 正文"); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("also allows reasoning activity when no slow-response callback was supplied", async () => {
+    vi.useFakeTimers(); let stream!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }))));
+    const pending = reviewArticleDetailed(article, settings("openai_chat"), article.markdown, { onTextDelta: vi.fn() });
+    await vi.advanceTimersByTimeAsync(120000);
+    stream.enqueue(new TextEncoder().encode(protocol("openai_chat"))); stream.close();
+    expect((await pending).markdown).toContain("## 正文");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("retains a deadline when only heartbeats arrive without generation progress", async () => {
+    vi.useFakeTimers(); let stream!: ReadableStreamDefaultController<Uint8Array>;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }))));
+    const pending = reviewArticleDetailed(article, settings("openai_chat"), article.markdown, { onTextDelta: vi.fn() });
+    const assertion = expect(pending).rejects.toThrow("审阅请求超时");
+    await vi.advanceTimersByTimeAsync(0);
+    for (let i = 0; i < 9; i++) {
+      await vi.advanceTimersByTimeAsync(60000);
+      stream.enqueue(new TextEncoder().encode(": heartbeat\n\n")); await vi.advanceTimersByTimeAsync(0);
+    }
+    await vi.advanceTimersByTimeAsync(60000); await assertion; expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])("allows a delayed non-streaming response after the warning (fallback=%s)", async fallback => {
+    vi.useFakeTimers(); let finish!: (response: Response) => void, signal!: AbortSignal;
+    const fetchMock = vi.fn((_path, options: RequestInit) => {
+      if (fallback && fetchMock.mock.calls.length === 1) return Promise.resolve(new Response("missing", { status: 404 }));
+      signal = options.signal as AbortSignal;
+      return new Promise<Response>(resolve => { finish = resolve; });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const slow = vi.fn(), accept = vi.fn();
+    const pending = reviewArticleDetailed(article, settings("openai_chat"), article.markdown, { onSlowResponse: slow, onTextReviewed: accept, ...(fallback ? { onTextDelta: vi.fn() } : {}) });
+    await vi.advanceTimersByTimeAsync(180000);
+    expect(slow).toHaveBeenCalledOnce(); expect(signal.aborted).toBe(false); expect(accept).not.toHaveBeenCalled();
+    finish(new Response(JSON.stringify({ code: 0, data: { status: 200, body: JSON.stringify({ choices: [{ message: { content: output } }] }) } })));
+    expect((await pending).markdown).toContain("## 正文"); expect(accept).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("stops an in-progress stream on user cancellation without accepting partial text", async () => {

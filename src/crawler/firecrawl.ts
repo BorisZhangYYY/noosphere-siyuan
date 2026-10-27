@@ -23,16 +23,18 @@ export function parseArticleUrl(raw: string): URL {
 }
 
 /** Return a normalized Markdown article and its source metadata. */
-export async function scrapeWithFirecrawl(rawUrl: string, apiKey: string): Promise<Article> {
+export async function scrapeWithFirecrawl(rawUrl: string, apiKey: string, onStage?: (stage: "fetching" | "processing") => void): Promise<Article> {
   if (!apiKey.trim()) throw new Error("请先填写 Firecrawl API Key");
   const originalUrl = parseArticleUrl(rawUrl);
   const url = canonicalArticleUrl(originalUrl);
+  onStage?.("fetching");
   const response = await proxyRequest(
     "https://api.firecrawl.dev/v2/scrape",
     "POST",
     { Authorization: `Bearer ${apiKey.trim()}` },
     buildScrapePayload(url),
   );
+  onStage?.("processing");
   const result = JSON.parse(response.body) as FirecrawlResult;
   if (result.success === false || !result.data) {
     throw new Error(result.error || "Firecrawl 未返回正文");

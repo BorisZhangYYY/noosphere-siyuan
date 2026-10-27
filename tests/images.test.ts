@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { reviewArticleDetailed } from "../src/review/provider";
-import { applyImageDecisions, imageInventory, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages, syncEditedImages } from "../src/review/images";
+import { applyImageDecisions, imageInventory, imageNeedsReview, imageSourceUnavailable, localizeImagePreviews, normalizeImageDecisions, restoreImages, reviewImages, syncEditedImages } from "../src/review/images";
 import { DEFAULT_SETTINGS, type Article, type Settings } from "../src/types";
 import { RequestCancelledError } from "../src/siyuan/api";
 
@@ -141,14 +141,46 @@ describe("image review", () => {
     expect(normalizeImageDecisions([legacy, ...result.decisions], article.url)).toEqual(result.decisions);
   });
 
-  it("keeps an actual blocked image with one short download failure and no model request", async () => {
-    const body = btoa("<!DOCTYPE html><html>Forbidden</html>");
+  it("retains a blocked image without making it block completion or adding a new status", async () => {
+    const body = btoa("<!DOCTYPE html><html>Forbidden</html>"), progress = vi.fn();
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ code: 0, data: { status: 403, body } }) })));
-    const result = await reviewImages(article, "摘要", settings);
+    const result = await reviewImages(article, "摘要", settings, progress);
     expect(fetch).toHaveBeenCalledOnce();
-    expect(result.decisions[0]).toMatchObject({ status: "failed", remove: false, error: "图片下载失败：上游服务返回 HTTP 403：请求被拒绝" });
-    expect(result.warnings).toEqual(["图片 1：图片下载失败：上游服务返回 HTTP 403：请求被拒绝"]);
-    expect(normalizeImageDecisions([{ ...result.decisions[0], error: `上游服务返回 HTTP 403：${body}` }], article.url)[0].error).toBe("上游服务返回 HTTP 403：请求被拒绝");
+    expect(result.decisions[0]).toMatchObject({ status: "failed", remove: false, errorStage: "download" });
+    expect(imageNeedsReview(result.decisions[0])).toBe(false);
+    expect(applyImageDecisions(article.markdown, result.decisions)).toBe(article.markdown);
+    expect(normalizeImageDecisions([{ ...progress.mock.calls[0][0].decisions[0], error: `上游服务返回 HTTP 403：${body}` }], article.url)[0].error).toBe("上游服务返回 HTTP 403：请求被拒绝");
+  });
+
+  it("continues past HTML responses, retains their links, and does not retry them when resuming", async () => {
+    const source = { ...article, markdown: "![坏图](https://example.com/bad.png)\n![正常](https://example.com/good.png)\n![重复坏图](https://example.com/bad.png)" };
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_path, options: RequestInit) => {
+      const request = JSON.parse(options.body as string); calls.push(`${request.method} ${request.url}`);
+      const data = request.method === "GET"
+        ? { status: 200, body: "aGVsbG8=", contentType: request.url.includes("bad.png") ? "text/html; charset=UTF-8" : "image/png" }
+        : { status: 200, body: JSON.stringify({ choices: [{ message: { content: '{"classification":"RELEVANT","description":"正文配图"}' } }] }) };
+      return { ok: true, json: async () => ({ code: 0, data }) };
+    }));
+    const result = await reviewImages(source, "摘要", settings);
+    expect(result.reviewed).toBe(1);
+    expect(result.decisions.map(item => item.status)).toEqual(["failed", "reviewed", "failed"]);
+    expect(result.decisions[0].error).toBe("模型暂不支持 text/html 图片格式");
+    expect(result.decisions.some(imageNeedsReview)).toBe(false);
+    expect(applyImageDecisions(source.markdown, result.decisions)).toBe(source.markdown);
+    expect(calls).toHaveLength(3);
+    const resumed = await reviewImages(source, "摘要", settings, undefined, undefined, result.decisions);
+    expect(resumed.decisions[0]).toMatchObject({ status: "failed", remove: false, errorStage: "download" });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("recognizes legacy HTML failures while preserving resumable model and network failures", () => {
+    const decision = { ...imageInventory(article.markdown, article.url)[0], status: "failed" as const };
+    expect(imageSourceUnavailable({ ...decision, error: "模型暂不支持 text/html 图片格式" })).toBe(true);
+    expect(imageNeedsReview({ ...decision, error: "模型暂不支持 text/html 图片格式" })).toBe(false);
+    expect(imageNeedsReview({ ...decision, error: "图片模型请求失败：HTTP 403" })).toBe(true);
+    expect(imageNeedsReview({ ...decision, error: "图片下载失败：上游服务返回 HTTP 502：失败" })).toBe(true);
+    expect(imageNeedsReview({ ...decision, error: "图片模型返回不完整或无效的识别结果，重试后仍未完成" })).toBe(true);
   });
 
   it("identifies a model permission failure separately from image downloads", async () => {
@@ -158,10 +190,28 @@ describe("image review", () => {
         ? { status: 200, body: "aGVsbG8=", contentType: "image/png" }
         : { status: 403, body: JSON.stringify({ error: { message: "model permission denied" } }) } }) };
     }));
-    const result = await reviewImages(article, "摘要", settings);
+    const progress = vi.fn();
+    await expect(reviewImages(article, "摘要", settings, progress)).rejects.toThrow("图片模型请求失败：上游服务返回 HTTP 403：model permission denied");
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(result.decisions[0].error).toBe("图片模型请求失败：上游服务返回 HTTP 403：model permission denied");
-    expect(result.decisions[0].remove).toBe(false);
+    expect(progress.mock.calls[0][0].decisions[0]).toMatchObject({ remove: false, status: "pending" });
+  });
+
+  it("stops scheduling images on model rate limits and retains completed checkpoints", async () => {
+    const source = { ...article, markdown: Array.from({ length: 6 }, (_, i) => `![${i}](https://example.com/${i}.png)`).join("\n") };
+    const previous = imageInventory(source.markdown, source.url);
+    previous[0] = { ...previous[0], status: "reviewed", description: "已识别的原结果" };
+    const progress = vi.fn(), downloads: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_path, options: RequestInit) => {
+      const request = JSON.parse(options.body as string);
+      if (request.method === "GET") downloads.push(request.url);
+      return { ok: true, json: async () => ({ code: 0, data: request.method === "GET"
+        ? { status: 200, body: "aGVsbG8=", contentType: "image/png" }
+        : { status: 429, body: "quota exceeded" } }) };
+    }));
+    await expect(reviewImages(source, "摘要", settings, progress, undefined, previous)).rejects.toThrow("429");
+    expect(downloads).toEqual(["https://example.com/1.png", "https://example.com/2.png"]);
+    expect(progress).toHaveBeenCalledOnce();
+    expect(progress.mock.calls[0][0].decisions[0]).toMatchObject({ description: "已识别的原结果", status: "reviewed" });
   });
 
   it("repairs legacy local asset URLs and preserves image decisions", () => {
@@ -203,6 +253,31 @@ describe("image review", () => {
     expect(progress.mock.calls[0][0].reviewed).toBe(0);
     expect(progress.mock.calls.at(-1)![0].reviewed).toBe(17);
     expect(result.warnings).toEqual([]);
+  });
+
+  it("resumes only pending or failed image identities while preserving completed choices", async () => {
+    const requests = mockReview("RELEVANT");
+    const source = { ...article, markdown: ["a", "b", "c", "d"].map(name => `![${name}](https://example.com/${name}.png)`).join("\n") };
+    const previous = imageInventory(source.markdown, source.url);
+    previous[0] = { ...previous[0], status: "reviewed", remove: true, recommendedRemove: true, description: "已识别广告" };
+    previous[1] = { ...previous[1], status: "failed", error: "offline" };
+    previous[3] = { ...previous[3], status: "reviewed", remove: false, recommendedRemove: true, description: "人工选择保留" };
+    const result = await reviewImages(source, "摘要", settings, undefined, undefined, previous);
+    expect(requests.filter(request => request.method === "GET").map(request => request.url)).toEqual(["https://example.com/b.png", "https://example.com/c.png"]);
+    expect(result.decisions[0]).toMatchObject({ remove: true, description: "已识别广告", status: "reviewed" });
+    expect(result.decisions[3]).toMatchObject({ remove: false, recommendedRemove: true, description: "人工选择保留", status: "reviewed" });
+    expect(result.reviewed).toBe(4);
+    expect(result.decisions[1].error).toBeUndefined();
+  });
+
+  it("separates text from images and resumes without another text request", async () => {
+    const requests = mockReview("RELEVANT"), acceptText = vi.fn();
+    const text = await reviewArticleDetailed(article, { ...settings, modelVisionCapable: false }, article.markdown, { textOnly: true, onTextReviewed: acceptText });
+    expect(requests).toHaveLength(1); expect(acceptText).toHaveBeenCalledOnce();
+    const result = await reviewArticleDetailed(article, settings, article.markdown, { resumeText: text, onTextReviewed: acceptText });
+    expect(requests).toHaveLength(3); expect(acceptText).toHaveBeenCalledOnce(); expect(result.imagesReviewed).toBe(1);
+    await reviewArticleDetailed(article, settings, article.markdown, { resumeText: result });
+    expect(requests).toHaveLength(3);
   });
 
   it("processes the entire inventory again in each full review", async () => {
@@ -284,9 +359,10 @@ describe("image review", () => {
       if (request.method === "GET") return { ok: true, json: async () => ({ code: 0, data: { status: 502, body: "download failed" } }) };
       return { ok: true, json: async () => ({ code: 0, data: { status: 200, body: JSON.stringify({ choices: [{ message: { content: review } }] }) } }) };
     }));
-    const result = await reviewArticleDetailed(article, settings);
-    expect(result.imageWarnings).toHaveLength(1);
-    expect(result.markdown).toContain("![screenshot](https://example.com/pic.png)");
+    const accept = vi.fn();
+    await expect(reviewArticleDetailed(article, settings, article.markdown, { onTextReviewed: accept })).rejects.toMatchObject({ code: 502 });
+    expect(accept.mock.calls[0][0].markdown).toContain("![screenshot](https://example.com/pic.png)");
+    expect(accept.mock.calls[0][0].imageDecisions[0].remove).toBe(false);
   });
 
   it("requires an explicit model vision capability flag", async () => {

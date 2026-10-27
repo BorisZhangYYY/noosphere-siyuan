@@ -92,6 +92,42 @@ it("keeps successful patches between attempts and degrades only unresolved desti
   expect(JSON.parse(result.response).markdown).toBe("审阅文字\n\n![原图](https://example.com/photo.png)\n\n资料【链接待确认】");
 });
 
+it.each([500, 1008])("stops link repair immediately on service code %i while preserving the generated draft", async code => {
+  const links = lockReviewLinks(article.markdown);
+  vi.stubGlobal("fetch", vi.fn(async () => code === 500
+    ? { ok: true, json: async () => ({ code: 0, data: { status: 500, body: "service failure" } }) }
+    : envelope(JSON.stringify({ code, message: "供应商失败", patches: [] }))));
+  const result = await repairReviewLinks(response("生成的正文\n\n![图](__BAD__)"), links, settings);
+  expect(result).toMatchObject({ attempts: 1, unresolved: 1, error: { code } });
+  expect(JSON.parse(result.response).markdown).toContain("生成的正文");
+  expect(JSON.parse(result.response).markdown).toContain("【图片引用待确认】");
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+it("retains successful patches when a later repair request fails with a code", async () => {
+  const links = lockReviewLinks(article.markdown), photo = links.input.match(/!\[原图\]\(([^)]+)\)/)![1];
+  let calls = 0;
+  vi.stubGlobal("fetch", vi.fn(async () => ++calls === 1
+    ? envelope(JSON.stringify({ patches: [{ issue: "issue1", reference: photo }] }))
+    : { ok: true, json: async () => ({ code: -1, msg: "服务失败" }) }));
+  const result = await repairReviewLinks(response("审阅文字\n\n![原图](__BAD__)\n\n[资料](__BAD2__)"), links, settings);
+  expect(result).toMatchObject({ attempts: 2, unresolved: 1, error: { code: -1 } });
+  expect(JSON.parse(result.response).markdown).toContain("![原图](https://example.com/photo.png)");
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("delivers retained text before reporting a repair error and never starts image review", async () => {
+  let calls = 0;
+  vi.stubGlobal("fetch", vi.fn(async () => ++calls === 1
+    ? envelope(response("新的审阅文字\n\n![图](__BAD__)"))
+    : { ok: true, json: async () => ({ code: 0, data: { status: 403, body: "permission denied" } }) }));
+  const accept = vi.fn();
+  await expect(reviewArticleDetailed(article, { ...settings, imageReview: true, modelVisionCapable: true }, article.markdown, { onTextReviewed: accept })).rejects.toMatchObject({ code: 403 });
+  expect(accept).toHaveBeenCalledOnce();
+  expect(accept.mock.calls[0][0]).toMatchObject({ markdown: expect.stringContaining("新的审阅文字"), imageDecisions: [expect.objectContaining({ unplaced: true, remove: false })] });
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
 it("disables malformed Markdown, reference and HTML destinations while keeping their text", () => {
   const links = lockReviewLinks(article.markdown);
   const draft = '[标题](https://bad.example/a_(b) "标题")\n![图](<https://bad.example/a b> "图")\n[ref]: https://bad.example/x\n<img src="https://bad.example/x">\n<https://bad.example/x>';

@@ -2,6 +2,7 @@
  * 分类：把审阅稿交给模型，在用户已有的分类文档里选一个落点。
  * 与 Noosphere 本体一致，模型只能选择、不能创建；置信度不足或候选为空时落到根文档。
  */
+import { throwIfServiceError } from "../siyuan/errors";
 import { requestShortText } from "./short-request";
 import { classificationCandidates, type CategoryNode } from "../siyuan/tree";
 import type { Settings } from "../types";
@@ -25,6 +26,7 @@ function extractJsonObject(text: string): Record<string, unknown> {
   if (start < 0 || end <= start) throw new Error("分类结果不是有效的 JSON 对象");
   const payload = JSON.parse(text.slice(start, end + 1)) as unknown;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error("分类结果必须是 JSON 对象");
+  throwIfServiceError(payload);
   return payload as Record<string, unknown>;
 }
 

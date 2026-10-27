@@ -1,22 +1,48 @@
 /** Conservative image review adapted from Noosphere's image_filter workflow. */
-import { proxyRequest, throwIfCancelled } from "../siyuan/api";
+import { NetworkDisconnectedError, ProxyTimeoutError, proxyRequest, requestWithTimeout, throwIfCancelled } from "../siyuan/api";
 import type { Article, Settings } from "../types";
 import { modelEndpoint } from "./endpoint";
 import { imageIdentity, isArticleImagePlaceholder, localAssetPath, resolveImageReference } from "../images/reference";
-import { conciseRequestError } from "../siyuan/errors";
+import { conciseRequestError, ServiceResponseError, throwIfServiceError, UpstreamHttpError } from "../siyuan/errors";
+import { chatResponseContent, reasoningRequestOptions } from "./reasoning";
+import { downloadRemoteImage, ImageUnavailableError, unavailableImageError } from "../images/download";
 
 const IMAGE_CONCURRENCY = 2;
-const IMAGE_REVIEW_TIMEOUT_MS = 120000;
+import { IMAGE_REVIEW_TIMEOUT_MS, IMAGE_DOWNLOAD_TIMEOUT_MS } from "../siyuan/timeouts";
 const PROMPT = `你正在审阅文章图片。只返回 JSON：{"classification":"RELEVANT"或"PROMOTION","description":"一句简短客观的图片描述"}。
 保留代码和界面截图、技术图、图表、与正文相关的照片或插画。仅在确定图片是二维码、关注订阅图、广告横幅或无关占位装饰时标记 PROMOTION。混合内容、证据不足或无法确定时标记 RELEVANT。不要凭图片修改文章事实。`;
 
+/** 模型端不可用时结束整批，不能对余下每张图片重复请求同一个故障服务。 */
+class ImageModelUnavailableError extends Error {
+  constructor(error: unknown) { super(`图片模型请求失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
+}
+
 interface ImageRef { full: string; raw: string; alt: string; url: string }
-export interface ImageDecision { full: string; alt: string; url: string; description: string; recommendedRemove: boolean; remove: boolean; status?: "pending" | "reviewed" | "failed"; error?: string; previewUrl?: string; unplaced?: boolean }
+export interface ImageDecision { full: string; alt: string; url: string; description: string; recommendedRemove: boolean; remove: boolean; status?: "pending" | "reviewed" | "failed"; error?: string; errorStage?: "download"; previewUrl?: string; unplaced?: boolean; manuallyAdded?: boolean }
 export interface ImageReviewResult { decisions: ImageDecision[]; reviewed: number; warnings: string[] }
 
 /** 兼容旧草稿的文字状态，正确显示素材的审阅结果。 */
 export function imageDecisionStatus(decision: ImageDecision): "pending" | "reviewed" | "failed" {
   return decision.status || (decision.description === "未审阅，默认保留" ? "pending" : decision.description === "未能识别，默认保留" ? "failed" : "reviewed");
+}
+
+/** 坏图沿用失败状态，记录来源错误位置；兼容旧记录中的明确下载/格式错误。 */
+export function imageSourceUnavailable(decision: ImageDecision): boolean {
+  if (imageDecisionStatus(decision) !== "failed") return false;
+  if (decision.errorStage === "download" || /^(?:模型暂不支持 .+ 图片格式|图片地址无效，无法下载)/.test(decision.error || "")) return true;
+  const oldDownloadCode = decision.error?.match(/^图片下载失败：.*HTTP (\d+)/)?.[1];
+  return !!oldDownloadCode && Number(oldDownloadCode) >= 400 && Number(oldDownloadCode) < 500 && ![408, 429].includes(Number(oldDownloadCode));
+}
+
+/** 图片来源已确认不可用时默认保留，不再阻止阶段完成；模型结果仍按原规则重试。 */
+export function imageNeedsReview(decision: ImageDecision): boolean {
+  const status = imageDecisionStatus(decision);
+  return !decision.remove && !decision.unplaced && status !== "reviewed" && !imageSourceUnavailable(decision);
+}
+
+/** 素材优先展示用户已经完成的添加/移除操作，独立保留模型识别结果。 */
+export function imageDisplayStatus(decision: ImageDecision): ReturnType<typeof imageDecisionStatus> | "added" | "removed" | "unplaced" {
+  return decision.remove ? "removed" : decision.unplaced ? "unplaced" : decision.manuallyAdded ? "added" : imageDecisionStatus(decision);
 }
 
 /** 素材面板在未调用 AI 时也展示图片，源码始终留在内部草稿中。 */
@@ -45,10 +71,10 @@ export function syncEditedImages(markdown: string, articleUrl: string, previous:
   // 素材保持原来的排列，正文插入/移除后不会使卡片跳动或打乱多选顺序。
   const decisions = previous.map(old => {
     const current = present.find(item => matches(old, item));
-    if (current) return { ...old, full: current.full, alt: current.alt, remove: false, unplaced: false };
+    if (current) return { ...old, full: current.full, alt: current.alt, remove: false, unplaced: false, manuallyAdded: old.manuallyAdded || old.remove || old.unplaced };
     return old.remove || old.unplaced ? old : { ...old, remove: true };
   });
-  return [...decisions, ...present.filter(item => !previous.some(old => matches(old, item)))];
+  return [...decisions, ...present.filter(item => !previous.some(old => matches(old, item))).map(item => ({ ...item, manuallyAdded: true }))];
 }
 
 /** 按 Markdown 引用修正旧草稿的地址，保留已有判断与用户取舍。 */
@@ -115,11 +141,12 @@ function refs(markdown: string, articleUrl: string): ImageRef[] {
 
 function responseText(body: string, format: Settings["modelFormat"]): string {
   const data = JSON.parse(body) as any;
+  throwIfServiceError(data);
   if (format === "anthropic") return data.content?.filter((item: any) => item.type === "text").map((item: any) => item.text).join("\n") || "";
   if (format === "openai_responses") return data.output_text || data.output?.flatMap((item: any) => item.content || []).filter((item: any) => item.type === "output_text").map((item: any) => item.text).join("\n") || "";
-  if (format === "google") return data.candidates?.[0]?.content?.parts?.map((item: any) => item.text || "").join("\n") || "";
+  if (format === "google") return data.candidates?.[0]?.content?.parts?.filter((item: any) => !item.thought).map((item: any) => item.text || "").join("\n") || "";
   const content = data.choices?.[0]?.message?.content;
-  return typeof content === "string" ? content : content?.filter((item: any) => item.type === "text").map((item: any) => item.text).join("\n") || "";
+  return chatResponseContent(content);
 }
 
 async function classify(ref: ImageRef, article: Article, summary: string, settings: Settings, signal?: AbortSignal): Promise<{ classification: "RELEVANT" | "PROMOTION"; description: string }> {
@@ -128,21 +155,26 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
   const local = localAssetPath(ref.raw);
   let downloaded: { body: string; contentType: string };
   if (local) {
-    const response = await fetch(local, { signal });
-    if (!response.ok) throw new Error(`思源图片读取失败：HTTP ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    let binary = "";
-    for (let start = 0; start < bytes.length; start += 8192) binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
-    downloaded = { body: btoa(binary), contentType: response.headers.get("Content-Type") || "" };
+    downloaded = await requestWithTimeout(async requestSignal => {
+      const response = await fetch(local, { signal: requestSignal });
+      if (!response.ok) {
+        const error = new UpstreamHttpError(response.status, "");
+        throw unavailableImageError(error) ? new ImageUnavailableError(error) : error;
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      let binary = "";
+      for (let start = 0; start < bytes.length; start += 8192) binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
+      return { body: btoa(binary), contentType: response.headers.get("Content-Type") || "" };
+    }, IMAGE_DOWNLOAD_TIMEOUT_MS, signal);
   } else {
-    const imageUrl = new URL(ref.url);
-    if (!["http:", "https:"].includes(imageUrl.protocol)) throw new Error("图片地址不是 HTTP 链接");
-    try { downloaded = await proxyRequest(imageUrl.href, "GET", {}, undefined, "base64", 60000, signal); }
-    catch (error) { throwIfCancelled(signal); throw new Error(`图片下载失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
+    let imageUrl: URL;
+    try { imageUrl = new URL(ref.url); if (!["http:", "https:"].includes(imageUrl.protocol)) throw new Error("图片地址不是 HTTP 链接"); }
+    catch { throw new ImageUnavailableError("图片地址无效，无法下载"); }
+    downloaded = await downloadRemoteImage(imageUrl.href, signal);
   }
   throwIfCancelled(signal);
   const mime = downloaded.contentType.split(";")[0].toLowerCase();
-  if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mime)) throw new Error(`模型暂不支持 ${mime || "未知"} 图片格式`);
+  if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mime)) throw new ImageUnavailableError(`模型暂不支持 ${mime || "未知"} 图片格式`);
   const context = `文章标题：${article.title}\n审阅后摘要：${summary}\n图片说明：${ref.alt || "无"}\n请结合审阅后的文章判断图片是否相关。`;
   const base64 = downloaded.body;
   let endpoint: string;
@@ -158,7 +190,7 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
     payload = { systemInstruction: { parts: [{ text: PROMPT }] }, contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime, data: base64 } }, { text: context }] }] };
   } else {
     endpoint = modelEndpoint(settings.modelBaseUrl, "/chat/completions", settings.modelFormat);
-    payload = { model: settings.modelName.trim(), temperature: 0, messages: [{ role: "system", content: PROMPT }, { role: "user", content: [{ type: "text", text: context }, { type: "image_url", image_url: { url: `data:${mime};base64,${base64}`, detail: "low" } }] }] };
+    payload = { model: settings.modelName.trim(), temperature: 0, ...reasoningRequestOptions(settings), messages: [{ role: "system", content: PROMPT }, { role: "user", content: [{ type: "text", text: context }, { type: "image_url", image_url: { url: `data:${mime};base64,${base64}`, detail: "low" } }] }] };
   }
   const headers: Record<string, string> = settings.modelFormat === "anthropic"
     ? { "x-api-key": settings.modelKey.trim(), "anthropic-version": "2023-06-01" }
@@ -168,14 +200,16 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
     throwIfCancelled(signal);
     let response: Awaited<ReturnType<typeof proxyRequest>>;
     try { response = await proxyRequest(endpoint, "POST", headers, payload, "text", IMAGE_REVIEW_TIMEOUT_MS, signal); }
-    catch (error) { throwIfCancelled(signal); throw new Error(`图片模型请求失败：${conciseRequestError(error instanceof Error ? error.message : String(error))}`); }
+    catch (error) { throwIfCancelled(signal); if (error instanceof ServiceResponseError) throw new ServiceResponseError(error.code, `图片模型请求失败：${conciseRequestError(error.message)}`); throw new ImageModelUnavailableError(error); }
     throwIfCancelled(signal);
     try {
       const text = responseText(response.body, settings.modelFormat).trim().replace(/^```(?:json)?\s*|\s*```$/gi, "");
       const parsed = JSON.parse(text) as { classification?: string; description?: string };
+      throwIfServiceError(parsed);
       if (parsed?.classification !== "RELEVANT" && parsed?.classification !== "PROMOTION") throw new Error("缺少图片判断");
       return { classification: parsed.classification, description: typeof parsed.description === "string" ? parsed.description.slice(0, 200) : "" };
-    } catch {
+    } catch (error) {
+      if (error instanceof ServiceResponseError) throw error;
       if (attempt === 1) throw new Error("图片模型返回不完整或无效的识别结果，重试后仍未完成");
     }
   }
@@ -183,10 +217,17 @@ async function classify(ref: ImageRef, article: Article, summary: string, settin
 }
 
 /** Suggest removals after text review; keep full Markdown until the user decides. */
-export async function reviewImages(article: Article, summary: string, settings: Settings, onProgress?: (result: ImageReviewResult) => void, signal?: AbortSignal): Promise<ImageReviewResult> {
+export async function reviewImages(article: Article, summary: string, settings: Settings, onProgress?: (result: ImageReviewResult) => void, signal?: AbortSignal, previous: ImageDecision[] = []): Promise<ImageReviewResult> {
   throwIfCancelled(signal);
   const images = [...new Map(refs(article.markdown, article.url).map(ref => [ref.full, ref])).values()];
-  const decisions = imageInventory(article.markdown, article.url);
+  const decisions = imageInventory(article.markdown, article.url).map(current => {
+    const old = previous.find(item => item.full === current.full)
+      || previous.find(item => imageIdentity(item.url) === imageIdentity(current.url) && (imageDecisionStatus(item) === "reviewed" || imageSourceUnavailable(item)));
+    if (!old) return current;
+    return { ...old, ...current, description: old.description, recommendedRemove: old.recommendedRemove, remove: old.remove,
+      status: imageDecisionStatus(old) === "reviewed" || imageSourceUnavailable(old) ? imageDecisionStatus(old) : "pending" as const,
+      error: imageSourceUnavailable(old) ? old.error : undefined, errorStage: imageSourceUnavailable(old) ? "download" as const : undefined };
+  });
   // 同一次审阅覆盖全部图片；相同地址的多个引用共享本次识别结果。
   const byUrl = new Map<string, Array<{ ref: ImageRef; index: number }>>();
   images.forEach((ref, index) => {
@@ -195,34 +236,58 @@ export async function reviewImages(article: Article, summary: string, settings: 
     group.push({ ref, index });
     byUrl.set(identity, group);
   });
-  const groups = Array.from(byUrl.values());
+  const groups = Array.from(byUrl.values()).filter(group => {
+    const completed = group.map(({ index }) => decisions[index]).find(item => imageDecisionStatus(item) === "reviewed" || imageSourceUnavailable(item));
+    if (!completed) return group.some(({ index }) => imageNeedsReview(decisions[index]));
+    // 同一图片的多个引用共用已完成判断，但保留每个引用的人工取舍和说明。
+    for (const { index } of group) {
+      if (imageDecisionStatus(decisions[index]) === "reviewed" || imageSourceUnavailable(decisions[index])) continue;
+      decisions[index] = { ...decisions[index], description: completed.description, recommendedRemove: completed.recommendedRemove,
+        remove: previous.some(item => item.full === decisions[index].full) ? decisions[index].remove : completed.remove,
+        status: imageDecisionStatus(completed), error: completed.error, errorStage: completed.errorStage };
+    }
+    return false;
+  });
   const warnings: string[] = [];
   const snapshot = (): ImageReviewResult => ({ decisions: decisions.map(item => ({ ...item })), reviewed: decisions.filter(item => imageDecisionStatus(item) === "reviewed").length, warnings: [...warnings] });
   let next = 0;
-  onProgress?.(snapshot());
+  let stopped = false;
+  const parentSignal = signal, controller = new AbortController();
+  const abort = (): void => controller.abort();
+  parentSignal?.addEventListener("abort", abort, { once: true });
+  if (parentSignal?.aborted) abort();
+  signal = controller.signal;
   const worker = async (): Promise<void> => {
-    while (next < groups.length) {
+    while (!stopped && next < groups.length) {
       throwIfCancelled(signal);
       const group = groups[next++];
       try {
         const result = await classify(group[0].ref, article, summary, settings, signal);
+        if (stopped) return;
         throwIfCancelled(signal);
         for (const { ref, index } of group) {
           const recommendedRemove = result.classification === "PROMOTION";
           decisions[index] = { ...decisions[index], description: result.description || ref.alt || "文章相关图片", recommendedRemove, remove: recommendedRemove, status: "reviewed" };
         }
       } catch (error) {
+        if (stopped) return;
         throwIfCancelled(signal);
+        if (error instanceof ImageModelUnavailableError || error instanceof NetworkDisconnectedError || error instanceof ProxyTimeoutError || error instanceof TypeError || error instanceof ServiceResponseError) { stopped = true; controller.abort(error); throw error; }
         const message = error instanceof Error ? error.message : String(error);
-        for (const { index } of group) decisions[index] = { ...decisions[index], description: "未能识别，默认保留", status: "failed", error: message };
+        const sourceUnavailable = error instanceof ImageUnavailableError;
+        for (const { index } of group) decisions[index] = { ...decisions[index], description: "未能识别，默认保留", status: "failed", error: message,
+          errorStage: sourceUnavailable ? "download" : undefined };
         warnings.push(`图片 ${group[0].index + 1}：${message}`);
       }
       // 处理过程中持续保留结果，完成状态在全部图片处理后统一返回。
       onProgress?.(snapshot());
     }
   };
-  await Promise.all(Array.from({ length: Math.min(IMAGE_CONCURRENCY, groups.length) }, worker));
-  return snapshot();
+  try {
+    onProgress?.(snapshot());
+    await Promise.all(Array.from({ length: Math.min(IMAGE_CONCURRENCY, groups.length) }, worker));
+    return snapshot();
+  } finally { parentSignal?.removeEventListener("abort", abort); controller.abort(); }
 }
 
 /** 链接已在请求边界锁定；此处只按原文位置补回文字模型遗漏的配图。 */

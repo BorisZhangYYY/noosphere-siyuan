@@ -29,6 +29,17 @@ describe("supplier-first configuration", () => {
     expect(PROVIDER_PRESETS.kimi_api.modelFormat).toBe("openai_chat");
   });
 
+  it("recognizes current MiniMax, DeepSeek and both Kimi Code regional endpoints without rewriting saved profiles", () => {
+    expect(inferProvider("https://api.minimax.cn/v1")).toBe("minimax");
+    expect(inferProvider("https://api.minimaxi.com/v1")).toBe("minimax");
+    expect(inferProvider("https://api.deepseek.com/v1")).toBe("deepseek");
+    expect(inferProvider("https://api.kimi.ai/coding/v1")).toBe("kimi_code");
+    expect(presetProfile("minimax").modelBaseUrl).toBe("https://api.minimax.cn/v1");
+    expect(presetProfile("deepseek").modelFormat).toBe("openai_chat");
+    const previous = { ...presetProfile("minimax"), modelBaseUrl: "https://api.minimaxi.com/v1", modelKey: "old-key" };
+    expect(restoreProviders({ activeProvider: "minimax", modelProfiles: { minimax: previous } }).modelProfiles.minimax).toEqual(previous);
+  });
+
   it("migrates an existing Kimi Code key and keeps other saved profiles", () => {
     const previous = restoreProviders({ modelBaseUrl: "https://api.kimi.com/coding/", modelFormat: "anthropic", modelKey: "old-secret", modelName: "kimi-for-coding", modelVisionCapable: true, imageReview: true });
     expect(previous.activeProvider).toBe("kimi_code");

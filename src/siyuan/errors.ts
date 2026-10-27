@@ -24,9 +24,14 @@ function responseDetail(status: number, body: string, encoding: "text" | "base64
   return text.replace(/\s+/g, " ").trim().slice(0, DETAIL_LIMIT) || defaultDetail(status);
 }
 
-export class UpstreamHttpError extends Error {
+/** 明确的服务错误保留原始代码，调用方不可将其当作空结果重试或默认成功。 */
+export class ServiceResponseError extends Error {
+  constructor(readonly code: string | number, message: string) { super(message); this.name = "ServiceResponseError"; }
+}
+
+export class UpstreamHttpError extends ServiceResponseError {
   constructor(readonly status: number, body: string, encoding: "text" | "base64" = "text") {
-    super(`上游服务返回 HTTP ${status}：${responseDetail(status, body, encoding)}`);
+    super(status, `上游服务返回 HTTP ${status}：${responseDetail(status, body, encoding)}`);
     this.name = "UpstreamHttpError";
   }
 }
@@ -38,4 +43,38 @@ export function conciseRequestError(message: string): string {
   const body = http[3].trim();
   const encoding = /^[A-Za-z0-9+/]+={0,2}$/.test(body) && body.length >= 40 ? "base64" : "text";
   return `${http[1]}${responseDetail(Number(http[2]), body, encoding)}`;
+}
+
+/** 只检查服务信封字段，不递归进入文章正文、choices 内容或用户数据。 */
+export function throwIfServiceError(value: unknown): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const record = value as Record<string, unknown>;
+  const object = (item: unknown): Record<string, unknown> => item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+  const text = (...items: unknown[]): string => items.find(item => typeof item === "string" && item.trim()) as string || "";
+  const errorCode = (code: unknown): code is string | number => {
+    if (typeof code !== "number" && typeof code !== "string") return false;
+    const normalized = String(code).trim();
+    if (!normalized || /^(?:ok|success|succeeded)$/i.test(normalized)) return false;
+    if (/^-?\d+$/.test(normalized)) { const number = Number(normalized); return number !== 0 && (number < 200 || number >= 300); }
+    return true;
+  };
+  const error = object(record.error);
+  const hasError = typeof record.error === "string" ? !!record.error.trim()
+    : record.error === true || typeof record.error === "number" && record.error !== 0 || Object.keys(error).length > 0;
+  const codes = [error.code, error.error_code, error.status_code, error.status, typeof record.error === "number" ? record.error : undefined, record.error_code, record.errorCode, record.code, record.status_code, record.statusCode];
+  const code = codes.find(errorCode);
+  const failedStatus = typeof record.status === "string"
+    && /^(?:error|failed|failure|cancelled|canceled|rejected|unavailable|unauthorized|permission_denied|resource_exhausted|invalid_argument|not_found|internal|deadline_exceeded|overloaded)$/i.test(record.status);
+  const statusCode = typeof record.status === "number" || typeof record.status === "string" && /^-?\d+$/.test(record.status)
+    ? record.status : undefined;
+  if (hasError || code !== undefined || record.success === false || record.ok === false || record.status === false || failedStatus || record.type === "error" || errorCode(statusCode)) {
+    const rawCode = code ?? ((errorCode(statusCode) ? statusCode : text(error.type, failedStatus ? record.status : "")) || "ERROR");
+    const safeCode = String(rawCode).replace(/[<>\r\n]/g, "").slice(0, 80);
+    const message = text(error.message, error.msg, error.detail, typeof record.error === "string" ? record.error : "", record.message, record.msg, record.status_msg);
+    const detail = /<!doctype|<html|<script|<body/i.test(message) ? "服务请求失败" : message.replace(/\s+/g, " ").trim().slice(0, DETAIL_LIMIT) || "服务请求失败";
+    throw new ServiceResponseError(typeof rawCode === "number" ? rawCode : safeCode, `服务返回错误 ${safeCode}：${detail}`);
+  }
+  // MiniMax 的业务码与 Responses 的事件信封都属于协议元数据。
+  if (record.base_resp) throwIfServiceError(record.base_resp);
+  if (record.response) throwIfServiceError(record.response);
 }
