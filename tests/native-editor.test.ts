@@ -31,18 +31,48 @@ describe("native article structure", () => {
     expect(safe).toContain('style="color: red"'); expect(safe).toContain('data-id="existing-block"');
   });
 
+  it("repairs missing native destinations in legacy history before reimport without overwriting canonical paths", () => {
+    const legacy = blockDOM.replace('src="https://example.com/image.png"', 'src="/assets/legacy.png"');
+    const container = document.createElement("div"); container.innerHTML = sanitizeBlockDOM(legacy);
+    expect(container.querySelector("img")?.getAttribute("data-src")).toBe("assets/legacy.png");
+    const existing = legacy.replace('<img src="/assets/legacy.png">', '<img src="/assets/legacy.png?preview=1" data-src="assets/legacy.png">');
+    container.innerHTML = sanitizeBlockDOM(existing);
+    expect(container.querySelector("img")?.getAttribute("data-src")).toBe("assets/legacy.png");
+  });
+
+  it("normalizes same-origin absolute asset addresses into kernel references and keeps remote sources", () => {
+    const absolute = blockDOM.replace('src="https://example.com/image.png"', `src="${location.origin}/assets/abs.png"`);
+    const container = document.createElement("div"); container.innerHTML = sanitizeBlockDOM(absolute);
+    expect(container.querySelector("img")?.getAttribute("data-src")).toBe("assets/abs.png");
+    container.innerHTML = sanitizeBlockDOM(blockDOM);
+    expect(container.querySelector("img")?.getAttribute("data-src")).toBe("https://example.com/image.png");
+  });
+
   it("removes and restores image choices without rebuilding or losing native text formatting", () => {
     const state = { markdown: "正文 ![图](https://example.com/image.png)", nativeMarkdown: "正文", blockDOM };
     const decision = { full: "![图](https://example.com/image.png)", alt: "图", url: "https://example.com/image.png", description: "", recommendedRemove: false, remove: true };
     const removed = applyEditorImageChoices(state, "正文", [decision]);
     expect(removed.blockDOM).not.toContain("<img"); expect(removed.blockDOM).toContain('style="color: red"');
     const restored = applyEditorImageChoices(removed, state.markdown, [{ ...decision, remove: false }]);
-    expect(restored.blockDOM).toBe(blockDOM);
+    expect(restored.blockDOM).toBe(sanitizeBlockDOM(blockDOM));
   });
 
   it("updates localized image paths and preserves native block references", () => {
     const result = localizeEditorState({ markdown: "正文", nativeMarkdown: "正文", blockDOM }, "正文 ![](assets/local.png)", { "https://example.com/image.png": "assets/local.png" });
     expect(result.blockDOM).toContain('src="assets/local.png"'); expect(result.blockDOM).toContain('data-id="existing-block"');
+  });
+
+  it("preserves the native image destination when localizing before a DOM import", () => {
+    const source = "https://example.com/image.png", local = "assets/local.png";
+    const native = blockDOM.replace(`<img src="${source}">`, `<img src="${source}" data-src="${source}">`);
+    const result = localizeEditorState({ markdown: `![图](${source})`, nativeMarkdown: `![图](${source})`,
+      blockDOM: native, fullBlockDOM: native }, `![图](${local})`, { [source]: local });
+    for (const html of [result.blockDOM, result.fullBlockDOM!]) {
+      const container = document.createElement("div"); container.innerHTML = html;
+      // Lute 的 BlockDOM2Md/内核 DOM 导入读取 data-src，而不是预览使用的 src。
+      expect(container.querySelector("img")?.getAttribute("data-src")).toBe(local);
+    }
+    expect(result.nativeMarkdown).toBe(`![图](${local})`);
   });
 
   it("imports native formatting with fresh block IDs and remaps only references within this article", async () => {

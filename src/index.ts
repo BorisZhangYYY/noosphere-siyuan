@@ -4,6 +4,7 @@ import { scrapeWithFirecrawl } from "./crawler/firecrawl";
 import { listAvailableModels, reviewArticleDetailed } from "./review/provider";
 import { applyImageDecisions, imageDecisionStatus, imageDisplayStatus, imageNeedsReview, imageSourceUnavailable, imageInventory, localizeImagePreviews, normalizeImageDecisions, syncEditedImages, type ImageDecision, type ImageReviewResult } from "./review/images";
 import { ImageLocalizationError, localizeMarkdownImages, replaceImageAssetRefs, type LocalizationResult } from "./images/localize";
+import { MaterialAssetPins } from "./images/material-pins";
 import { migratePerspective, OUTLINE_FORMAT, REVIEW_PERSPECTIVES, validatePerspective } from "./review/perspectives";
 import { configuredProfiles, isCustomProvider, moveProvider, orderedProviderIds, presetProfile, providerInfo, providerMark, restoreProviders, validateProviderName, type ModelProfile, type ProviderId } from "./review/providers";
 import { appendArticle, validateTargetDocument } from "./siyuan/writer";
@@ -57,6 +58,7 @@ export default class NoospherePlugin extends Plugin {
   private readonly ownedWrites = new Set<Promise<unknown>>();
   private draftStore!: CaptureDraftStore;
   private historyStore!: CaptureHistoryStore;
+  private materialPins!: MaterialAssetPins;
   private cancelActiveReview: (() => void) | null = null;
   private draggingTopBar = false;
   private readonly onTopBarDragOver = (event: DragEvent): void => {
@@ -120,6 +122,7 @@ export default class NoospherePlugin extends Plugin {
       error => showMessage(`历史记录保存失败：${String(error)}`, 7000, "error"), recovery, workspaceId,
     );
     await this.historyStore.load();
+    this.materialPins = new MaterialAssetPins(this.historyStore, () => this.uninstalled);
     const currentDraft = this.draftStore.current;
     // 全局配置优先；仅在首次升级且未配置时采用旧草稿的根，历史文章不能改动设置。
     if (saved?.classificationSettingsVersion !== 1) {
@@ -138,6 +141,7 @@ export default class NoospherePlugin extends Plugin {
       this.draftStore.update({ ...currentDraft, historyId,
         article: currentDraft.article ? restoreArticleTime(currentDraft.article, entry?.capturedAt) : null });
     }
+    void this.materialPins.restore();
     document.querySelectorAll('[data-id="noosphere-capture-left"], [data-id="noosphere-capture-right"]').forEach(entry => entry.remove());
     this.registerTopBar();
     document.addEventListener("dragover", this.onTopBarDragOver);
@@ -676,7 +680,7 @@ export default class NoospherePlugin extends Plugin {
       progressBar.setAttribute("aria-valuetext", `${label}，${detail}`);
       if (value === null) progressBar.removeAttribute("value");
       else progressBar.value = value;
-      progressPanel.hidden = !(reviewing && reviewCheckpoint?.stage === "text") && label !== "正在自动保存";
+      progressPanel.hidden = !(reviewing && reviewCheckpoint?.stage === "text");
     };
     /** 从旧版历史也可继续图片阶段；仅已确认的完整文字可以成为图片断点。 */
     const canResumeImages = (): boolean => !!article && textReviewed && !!reviewInfo
@@ -718,9 +722,9 @@ export default class NoospherePlugin extends Plugin {
       action("resumeImages").setAttribute("aria-label", "继续图片审阅");
       const interrupted = !busy && reviewCheckpoint && reviewCheckpoint.stage !== "complete";
       role("reviewRecovery").hidden = !reviewCheckpoint?.saveFailed;
-      role("reviewRecovery").textContent = reviewCheckpoint?.saveFailed ? "自动保存失败，请重试保存。" : "";
+      role("reviewRecovery").textContent = reviewCheckpoint?.saveFailed ? "保存失败，请点击“保存文章”重试。" : "";
       role("reviewState").textContent = reviewing ? "审阅中" : interrupted ? textDone ? "图片待继续" : "文本待重试" : textReviewed ? "已审阅" : "待审阅";
-      progressPanel.hidden = !textRunning && !(busy && role("reviewProgressLabel").textContent === "正在自动保存");
+      progressPanel.hidden = !textRunning;
     };
     const selectedAssets = (): ImageDecision[] => selectedAssetUrls
       .map(url => imageDecisions.find(item => item.url === url)).filter((item): item is ImageDecision => !!item);
@@ -875,9 +879,13 @@ export default class NoospherePlugin extends Plugin {
           button.addEventListener("click", () => {
             if (busy) return;
             if (operation === "delete") {
-              confirm("删除历史文章", "删除后将无法从知流历史恢复这篇文章。已导入思源的文档和图片会保留。", () => {
+              confirm("删除历史文章", "删除后将无法从知流历史恢复这篇文章。已导入思源的文档会保留；仅由该历史保留、正文未引用的图片会被释放，可能被思源的未引用资源清理删除。", () => {
                 if (busy || this.uninstalled) return;
                 this.historyStore.remove(entry.id);
+                // 历史删除后释放该条目的素材绑定，图片回到普通未引用资源管理。
+                if (entry.draft.savedDocumentId) {
+                  void this.materialPins.remove(entry.draft.savedDocumentId, entry.id).catch(() => undefined);
+                }
                 if (historyId === entry.id) {
                   article = null; historyId = undefined; markdown.value = ""; reviewedMarkdown = "";
                   imageDecisions = []; reviewInfo = undefined; textReviewed = false; reviewCheckpoint = undefined; inputUrl.value = "";
@@ -1133,13 +1141,13 @@ export default class NoospherePlugin extends Plugin {
       cancelConfirmationOpen = true;
       // 弹窗属于当前这一轮审阅；迟到的确认不能撤回已完成结果或取消下一轮。
       confirm(streamBodyValidated ? "取消图片审阅？" : "取消本次审阅？", streamBodyValidated
-        ? "正文和已完成的图片结果会保留，只停止剩余图片审阅；本次不会自动保存，可检查后手动保存。确定要取消吗？"
+        ? "正文和已完成的图片结果会保留，只停止剩余图片审阅；检查后可点击“保存文章”。确定要取消吗？"
         : "正文尚未完成，取消后会恢复到本次审阅开始前的内容。如果确认时正文已经完成，则会保留正文，只停止图片审阅。确定要取消吗？", () => {
         cancelConfirmationOpen = false;
         if (reviewing && this.cancelActiveReview === cancel && reviewController === controller && !controller.signal.aborted) cancel();
       }, () => { cancelConfirmationOpen = false; });
     });
-    const run = async (label: string, operation: (signal?: AbortSignal) => Promise<string>, reviewMode: "all" | "text" | "images" = "all"): Promise<void> => {
+    const run = async (label: string, operation: (signal?: AbortSignal) => Promise<string>, reviewMode: "text" | "images" = "text"): Promise<void> => {
       if (busy) return;
       savedStatusRevision++;
       busy = true;
@@ -1147,7 +1155,7 @@ export default class NoospherePlugin extends Plugin {
       capturing = label === "抓取";
       if (capturing) startCaptureProgress();
       reviewing = isReview;
-      const resumingImages = isReview && (reviewMode === "images" || reviewMode === "all" && canResumeImages());
+      const resumingImages = isReview && reviewMode === "images";
       const beforeReview: ReviewSnapshot | undefined = reviewing && article ? structuredClone({ article, markdown: markdown.value, reviewedMarkdown, imageDecisions, reviewInfo, textReviewed, reviewCheckpoint, savedDocumentId, savedDocumentMissing, savedContentChanged, editorState, bodyEdited }) : undefined;
       const controller = reviewing ? new AbortController() : undefined;
       reviewController = controller;
@@ -1184,36 +1192,21 @@ export default class NoospherePlugin extends Plugin {
       if (capturing) { status.hidden = true; statusText.textContent = ""; }
       else setStatus(`${label}中…`);
       let successful = false;
-      let autoSaveFailed = false;
       try {
         const pending = operation(controller?.signal);
-        let message = await (cancelled ? Promise.race([pending, cancelled]) : pending);
+        const message = await (cancelled ? Promise.race([pending, cancelled]) : pending);
         if (this.uninstalled) return;
         throwIfCancelled(controller?.signal);
         successful = true;
-        if (isReview && reviewCheckpoint?.stage === "complete" && saveMode() === "auto" && !reviewHasUnresolvedLinks) {
-          // 审阅结果已确认；进入保存阶段后不能再用“取消审阅”恢复旧快照。
-          reviewing = false;
-          this.cancelActiveReview = null;
-          updateActions();
-          setReviewProgress("正在自动保存", null, "审阅已完成");
-          try { message = await saveArticle(); }
-          catch (error) {
-            autoSaveFailed = true;
-            if (reviewCheckpoint) reviewCheckpoint.saveFailed = true;
-            message = "审阅完成，自动保存未完成。文章已保留，可点击“保存文章”重试。";
-            showMessage(`自动保存失败：${error instanceof Error ? error.message : String(error)}`, 7000, "error");
-          }
-          if (this.uninstalled) return;
-        }
-        if (message) setStatus(message, autoSaveFailed ? "info" : "success");
+        // 审阅只更新草稿；分类、图片本地化和文档写入只能由保存按钮触发。
+        if (message) setStatus(message, "success");
         else { status.hidden = true; statusText.textContent = ""; }
-        if (isReview && dialogClosed) showMessage(`「${article?.title || "文章"}」${message || (reviewCheckpoint?.stage === "images" ? "文本已保留，图片待继续。" : saveMode() === "auto" ? "审阅完成，已保存。" : "审阅完成。")}`, 7000);
+        if (isReview && dialogClosed) showMessage(`「${article?.title || "文章"}」${message || (reviewCheckpoint?.stage === "images" ? "文本已保留，图片待继续。" : "审阅完成，请点击“保存文章”保存。")}`, 7000);
         if (isReview) {
           const failed = imageDecisions.filter(item => !item.remove && imageDecisionStatus(item) === "failed").length;
           const paused = reviewCheckpoint?.stage === "images";
           const percent = paused ? Math.round(40 + 55 * imageDecisions.filter(item => imageDecisionStatus(item) === "reviewed").length / Math.max(1, imageDecisions.length)) : 100;
-          setReviewProgress(autoSaveFailed ? "自动保存失败" : reviewHasUnresolvedLinks ? "审阅稿已保留 · 引用待确认" : failed ? `已结束 · ${failed} 张识别失败` : paused ? "文本完成 · 图片待继续" : "审阅完成", percent, autoSaveFailed ? "可重试保存" : paused ? "断点已保留" : "100%");
+          setReviewProgress(reviewHasUnresolvedLinks ? "审阅稿已保留 · 引用待确认" : failed ? `已结束 · ${failed} 张识别失败` : paused ? "文本完成 · 图片待继续" : "审阅完成", percent, paused ? "断点已保留" : "100%");
         }
       } catch (error) {
         if (this.uninstalled) return;
@@ -1240,6 +1233,7 @@ export default class NoospherePlugin extends Plugin {
           progressBar.value = streamBodyValidated ? 40 : 0;
           progressPanel.classList.add("is-failed");
         }
+        if (label === "保存" && reviewCheckpoint) reviewCheckpoint.saveFailed = true;
         showMessage(`${label}失败：${message}`, 7000, "error");
       } finally {
         if (streamPreviewTimer) clearTimeout(streamPreviewTimer);
@@ -1873,20 +1867,15 @@ export default class NoospherePlugin extends Plugin {
       renderReviewPipeline();
       setStatus(`图片已审阅 ${result.reviewed}/${imageDecisions.length}。`);
     };
-    /** 主操作从断点继续，流程节点也可以单独执行文字或图片阶段。 */
-    const startReview = (mode: "all" | "text" | "images" = "all"): void => {
-      const resumeImages = mode === "images" || mode === "all" && canResumeImages();
+    /** 主操作只执行文本；图片阶段必须由用户显式点击，不因配置或历史断点自动触发。 */
+    const startReview = (mode: "text" | "images" = "text"): void => {
+      const resumeImages = mode === "images";
       if (mode === "images" && !canResumeImages()) return;
       void run("AI 审阅", async signal => {
         const settings = await saveSettings();
         throwIfCancelled(signal);
         if (!article || !markdown.value.trim()) throw new Error("请先抓取文章");
         if (!resumeImages && (!settings.modelKey || !settings.modelName)) { showView("setup"); throw new Error("请先配置模型 API Key 和模型名称"); }
-        // 自动模式先检查锚点，配置错误时不消耗模型请求。
-        if (saveMode() === "auto") {
-          if (!settings.rootDocumentId) throw new Error("请先在分类配置中配置分类根目录");
-          await locateDocument(settings.rootDocumentId, signal);
-        }
         throwIfCancelled(signal);
         let textReceived = resumeImages;
         let responseDelayed = false;
@@ -2021,15 +2010,16 @@ export default class NoospherePlugin extends Plugin {
         renderImageDecisions();
         const failedImages = imageDecisions.filter(item => imageDecisionStatus(item) === "failed" && !imageSourceUnavailable(item));
         if (failedImages.length) showMessage(`图片识别有 ${failedImages.length} 张未完成，相关图片已保留。${failedImages[0].error || "未能识别图片"}`, 7000, "error");
-        if (result.linkRepair?.unresolved) return `审阅稿已保留，${result.linkRepair.unresolved} 处引用待确认；原图保留在素材中，可手动插入。${saveMode() === "auto" ? "本次未自动保存，请确认后手动保存。" : "请确认后保存。"}`;
+        if (result.linkRepair?.unresolved) return `审阅稿已保留，${result.linkRepair.unresolved} 处引用待确认；原图保留在素材中，可手动插入。请确认后点击“保存文章”。`;
         return "";
       }, mode);
     };
     action("review").addEventListener("click", () => startReview());
     action("reviewText").addEventListener("click", () => startReview("text"));
     action("resumeImages").addEventListener("click", () => startReview("images"));
-    /** 手动点击与审阅后自动保存共用同一流程；目录失败不会抹掉已成功的落库记录。 */
+    /** 仅保存按钮触发，按当前方式分类或追加；目录失败不会抹掉已成功的落库记录。 */
     const saveArticle = async (): Promise<string> => {
+      const previousDocumentId = savedDocumentId;
       const autoMode = saveMode() === "auto";
       const manualDocumentId = target.value.trim();
       const settings = await saveSettings();
@@ -2116,6 +2106,9 @@ export default class NoospherePlugin extends Plugin {
         classification = decision;
         autoSave = { rootId: anchor.id, documentId: written.documentId, sourceKey };
         savedDocumentId = written.documentId; savedDocumentMissing = false; savedContentChanged = false;
+        persistDraft();
+        await this.materialPins.saved(written.documentId, historyId || "", previousDocumentId)
+          .catch(error => showMessage(`文章已保存，素材保护未完成：${String(error)}`, 7000, "error"));
         if (reviewCheckpoint?.saveFailed) { reviewCheckpoint.saveFailed = false; setReviewProgress("审阅完成", 100, "已保存"); }
         // 未启用笔记本根文档时，笔记本本身没有可放目录块的正文。
         indexDocumentId = written.parentId === anchor.notebook ? undefined : written.parentId;
@@ -2136,6 +2129,9 @@ export default class NoospherePlugin extends Plugin {
       setStatus("正在写入文章…");
       await appendArticle(manualDocumentId, article, content, editorState?.blockDOM);
       savedDocumentId = manualDocumentId; savedDocumentMissing = false; savedContentChanged = false;
+      persistDraft();
+      await this.materialPins.saved(manualDocumentId, historyId || "", previousDocumentId)
+        .catch(error => showMessage(`文章已保存，素材保护未完成：${String(error)}`, 7000, "error"));
       if (reviewCheckpoint?.saveFailed) { reviewCheckpoint.saveFailed = false; setReviewProgress("审阅完成", 100, "已保存"); }
       renderSavedLocation(); persistDraft();
       return "";
