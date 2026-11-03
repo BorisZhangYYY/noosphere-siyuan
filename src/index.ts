@@ -879,7 +879,7 @@ export default class NoospherePlugin extends Plugin {
           button.addEventListener("click", () => {
             if (busy) return;
             if (operation === "delete") {
-              confirm("删除历史文章", "删除后将无法从知流历史恢复这篇文章。已导入思源的文档和图片会保留。", () => {
+              confirm("删除历史文章", "删除后将无法从知流历史恢复这篇文章。已导入思源的文档会保留；仅由该历史保留、正文未引用的图片会被释放，可能被思源的未引用资源清理删除。", () => {
                 if (busy || this.uninstalled) return;
                 this.historyStore.remove(entry.id);
                 // 历史删除后释放该条目的素材绑定，图片回到普通未引用资源管理。
@@ -1147,7 +1147,7 @@ export default class NoospherePlugin extends Plugin {
         if (reviewing && this.cancelActiveReview === cancel && reviewController === controller && !controller.signal.aborted) cancel();
       }, () => { cancelConfirmationOpen = false; });
     });
-    const run = async (label: string, operation: (signal?: AbortSignal) => Promise<string>, reviewMode: "all" | "text" | "images" = "all"): Promise<void> => {
+    const run = async (label: string, operation: (signal?: AbortSignal) => Promise<string>, reviewMode: "text" | "images" = "text"): Promise<void> => {
       if (busy) return;
       savedStatusRevision++;
       busy = true;

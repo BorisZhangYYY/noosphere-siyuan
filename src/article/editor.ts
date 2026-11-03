@@ -4,7 +4,7 @@ import DOMPurify from "dompurify";
 import type { Article } from "../types";
 import type { ArticleEditorState } from "./draft";
 import { composeArticle, sourceMetadata, stripSourceMetadata } from "./compose";
-import { imageIdentity, localAssetPath, resolveImageReference } from "../images/reference";
+import { imageIdentity, localAssetPath, normalizeAssetRef, resolveImageReference } from "../images/reference";
 import type { ImageDecision } from "../review/images";
 import { previewUrl, type MarkdownRenderer } from "./preview";
 import { replaceImageAssetRefs } from "../images/localize";
@@ -36,10 +36,12 @@ export function sanitizeBlockDOM(html: string): string {
     FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"], FORBID_ATTR: ["srcset"] });
   const container = document.createElement("div"); container.innerHTML = safe;
   // 旧历史可能只剩可显示的 src；在恢复与导入边界补齐内核引用，避免再次保存为空图片。
+  const base = typeof location === "undefined" ? "" : location.href;
   container.querySelectorAll<HTMLImageElement>('[data-type="img"] img[src]').forEach(img => {
     if (img.getAttribute("data-src")) return;
     const source = img.getAttribute("src")!;
-    img.setAttribute("data-src", localAssetPath(source)?.replace(/^\//, "") || source);
+    // 同源绝对地址按内核格式写回；远程图片保持原地址。
+    img.setAttribute("data-src", normalizeAssetRef(source, base) || source);
   });
   return container.innerHTML;
 }

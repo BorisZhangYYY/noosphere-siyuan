@@ -16,6 +16,19 @@ export function resolveImageReference(raw: string, articleUrl: string): string {
   } catch { return ""; }
 }
 
+/** 同源绝对地址（如 http://127.0.0.1:6806/assets/x.png）归一化为内核资源引用 assets/x.png。 */
+export function normalizeAssetRef(raw: string, base: string): string | null {
+  const local = localAssetPath(raw);
+  if (local) return local.replace(/^\//, "");
+  if (!base) return null;
+  try {
+    const url = new URL(raw.trim().replace(/^<|>$/g, ""), base);
+    if (url.origin !== new URL(base).origin) return null;
+    if (!/^\/assets\//i.test(url.pathname)) return null;
+    return `${url.pathname.replace(/^\//, "")}${url.search}${url.hash}`;
+  } catch { return null; }
+}
+
 /** 微信同一资源的尺寸、协议和追踪参数不改变配图身份；其他来源保持原地址。 */
 export function imageIdentity(raw: string): string {
   try {

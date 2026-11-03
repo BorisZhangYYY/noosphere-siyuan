@@ -40,6 +40,14 @@ describe("native article structure", () => {
     expect(container.querySelector("img")?.getAttribute("data-src")).toBe("assets/legacy.png");
   });
 
+  it("normalizes same-origin absolute asset addresses into kernel references and keeps remote sources", () => {
+    const absolute = blockDOM.replace('src="https://example.com/image.png"', `src="${location.origin}/assets/abs.png"`);
+    const container = document.createElement("div"); container.innerHTML = sanitizeBlockDOM(absolute);
+    expect(container.querySelector("img")?.getAttribute("data-src")).toBe("assets/abs.png");
+    container.innerHTML = sanitizeBlockDOM(blockDOM);
+    expect(container.querySelector("img")?.getAttribute("data-src")).toBe("https://example.com/image.png");
+  });
+
   it("removes and restores image choices without rebuilding or losing native text formatting", () => {
     const state = { markdown: "正文 ![图](https://example.com/image.png)", nativeMarkdown: "正文", blockDOM };
     const decision = { full: "![图](https://example.com/image.png)", alt: "图", url: "https://example.com/image.png", description: "", recommendedRemove: false, remove: true };
