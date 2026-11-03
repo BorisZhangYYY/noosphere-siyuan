@@ -130,6 +130,108 @@ function openHistoryArticle(index = 0): void { click("showHistory"); historyActi
 vi.mock("../src/siyuan/saved", () => ({ checkSavedDocuments: vi.fn() }));
 
 describe("workbench regression", () => {
+  const pinDoc = "20260101000000-ppppppp", nextPinDoc = "20260101000000-qqqqqqq";
+  function pinDraft(id: string, markdown = "正文", savedDocumentId = pinDoc): CaptureDraft {
+    return { version: 1, updatedAt: 1, article: { ...article, markdown }, url: article.url, markdown,
+      reviewedMarkdown: markdown, imageDecisions: [], targetDocumentId: savedDocumentId, perspective: "original",
+      savedDocumentId, historyId: id };
+  }
+  function seedPins(drafts: CaptureDraft[]): void {
+    fixtures.files.set(HISTORY_STORAGE_NAME, { version: 1, updatedAt: 1,
+      entries: drafts.map((draft, index) => ({ id: draft.historyId!, capturedAt: 100 - index, draft })) });
+  }
+  function pinKernel(bodies: Record<string, string>, attrs: Record<string, Record<string, string>> = {}, pause?: () => Promise<void>) {
+    const writes: Array<{ id: string; attrs: Record<string, string> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string, options: RequestInit) => {
+      const payload = JSON.parse(options.body as string);
+      let data: unknown = {};
+      if (path === "/api/block/getBlockKramdown") { await pause?.(); data = { kramdown: bodies[payload.id] || "正文" }; }
+      if (path === "/api/attr/getBlockAttrs") data = { ...attrs[payload.id] };
+      if (path === "/api/attr/setBlockAttrs") {
+        writes.push(payload); const target = attrs[payload.id] ||= {};
+        for (const [name, value] of Object.entries(payload.attrs)) { if (value) target[name] = value as string; else delete target[name]; }
+      }
+      return { ok: true, json: async () => ({ code: 0, data }) };
+    }));
+    return { attrs, writes };
+  }
+  it("asset orchestration protects all 205 historical images during startup", async () => {
+    const paths = Array.from({ length: 205 }, (_, i) => `assets/image-${i}.png`);
+    seedPins([pinDraft("many", paths.map(path => `![](${path})`).join("\n"))]);
+    const kernel = pinKernel({ [pinDoc]: "正文" }); const plugin = await launch();
+    await vi.waitFor(() => expect(Object.values(kernel.attrs[pinDoc] || {})).toHaveLength(205)); plugin.onunload();
+  });
+  it("asset orchestration clears empty bindings during restoration", async () => {
+    seedPins([pinDraft("empty")]);
+    const kernel = pinKernel({ [pinDoc]: "正文" }, { [pinDoc]: { "custom-data-assets-zl-empty-1": "assets/stale.png" } });
+    const plugin = await launch();
+    await vi.waitFor(() => expect(kernel.attrs[pinDoc]).toEqual({})); plugin.onunload();
+  });
+  it("asset orchestration recomputes every shared history and the saving draft immediately", async () => {
+    seedPins([pinDraft("current", "新正文"), pinDraft("older", "![](assets/old.png)")]);
+    const bodies = { [pinDoc]: "![](assets/old.png)" }; const kernel = pinKernel(bodies);
+    const plugin = await launch(); openHistoryArticle();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    vi.mocked(localizeMarkdownImages).mockImplementation(async markdown => ({ markdown, localized: 0, warnings: [] }));
+    vi.mocked(appendArticle).mockImplementation(async () => { bodies[pinDoc] = "新正文"; return pinDoc; });
+    click("editArticle"); document.querySelector('[data-role="nativeContent"]')!.textContent = "新正文修改";
+    document.querySelector('[data-role="nativeContent"]')!.dispatchEvent(new Event("input"));
+    click("confirmArticle"); click("save"); await ready();
+    expect(appendArticle).toHaveBeenCalled();
+    expect(Object.values(kernel.attrs[pinDoc] || {})).toContain("assets/old.png"); plugin.onunload();
+  });
+  it("asset orchestration cannot recreate a deleted entry after delayed restore", async () => {
+    seedPins([pinDraft("late", "![](assets/late.png)")]);
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    const kernel = pinKernel({ [pinDoc]: "正文" }, {}, () => gate);
+    const plugin = await launch(); click("showHistory"); historyAction("delete"); fixtures.confirm.mock.calls.at(-1)![2]();
+    release(); await new Promise(resolve => setTimeout(resolve, 30));
+    expect(Object.values(kernel.attrs[pinDoc] || {})).not.toContain("assets/late.png");
+    expect(kernel.writes.some(write => Object.values(write.attrs).includes("assets/late.png"))).toBe(false); plugin.onunload();
+  });
+  it("asset orchestration moves only this entry after new binding succeeds", async () => {
+    const moving = pinDraft("moving", "![](assets/material.png)");
+    seedPins([moving, pinDraft("staying", "![](assets/stay.png)")]);
+    const kernel = pinKernel({ [pinDoc]: "正文", [nextPinDoc]: "正文" });
+    const plugin = await launch(); openHistoryArticle();
+    await vi.waitFor(() => expect(Object.values(kernel.attrs[pinDoc] || {})).toHaveLength(2));
+    vi.mocked(localizeMarkdownImages).mockResolvedValue({ markdown: "正文", localized: 0, warnings: [] });
+    input("targetDocumentId", nextPinDoc); click("save"); await ready();
+    expect(Object.values(kernel.attrs[nextPinDoc] || {})).toContain("assets/material.png");
+    expect(Object.values(kernel.attrs[pinDoc] || {})).toEqual(["assets/stay.png"]);
+    const binding = kernel.writes.findIndex(write => write.id === nextPinDoc);
+    const release = kernel.writes.findIndex(write => write.id === pinDoc && Object.values(write.attrs).includes(""));
+    expect(release).toBeGreaterThan(binding); plugin.onunload();
+  });
+
+  it("asset orchestration isolates colliding fallback histories without deleting legacy protection", async () => {
+    const first = "capture-lz9x-a1", second = "capture-lz9x-b2";
+    seedPins([pinDraft(first, "![](assets/first.png)"), pinDraft(second, "![](assets/second.png)")]);
+    const legacy = "custom-data-assets-zl-capturelz9-1";
+    const kernel = pinKernel({ [pinDoc]: "正文" }, { [pinDoc]: { [legacy]: "assets/legacy.png" } });
+    const plugin = await launch();
+    await vi.waitFor(() => expect(Object.values(kernel.attrs[pinDoc] || {})).toHaveLength(3));
+    click("showHistory"); historyAction("delete"); fixtures.confirm.mock.calls.at(-1)![2]();
+    await vi.waitFor(() => expect(Object.values(kernel.attrs[pinDoc] || {})).not.toContain("assets/first.png"));
+    expect(Object.values(kernel.attrs[pinDoc])).toEqual(expect.arrayContaining(["assets/second.png", "assets/legacy.png"]));
+    plugin.onunload();
+  });
+  it("asset orchestration retains old bindings when new target binding fails", async () => {
+    seedPins([pinDraft("moving", "![](assets/material.png)")]);
+    const kernel = pinKernel({ [pinDoc]: "正文", [nextPinDoc]: "正文" });
+    const plugin = await launch(); openHistoryArticle();
+    await vi.waitFor(() => expect(Object.values(kernel.attrs[pinDoc] || {})).toContain("assets/material.png"));
+    const fetchKernel = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (path: string, options: RequestInit) => {
+      if (path === "/api/attr/setBlockAttrs" && JSON.parse(options.body as string).id === nextPinDoc) throw new Error("binding failed");
+      return fetchKernel(path, options);
+    }));
+    vi.mocked(localizeMarkdownImages).mockResolvedValue({ markdown: "正文", localized: 0, warnings: [] });
+    input("targetDocumentId", nextPinDoc); click("save"); await ready();
+    expect(Object.values(kernel.attrs[pinDoc] || {})).toContain("assets/material.png");
+    expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("素材保护未完成"), 7000, "error");
+    plugin.onunload();
+  });
   it("keeps assets collapsed with review status visible and shares the save scroller", async () => {
     await launch(); await scrape();
     const assets = document.querySelector<HTMLDetailsElement>('[data-role="imageDecisions"]')!;
@@ -803,26 +905,35 @@ describe("workbench regression", () => {
     finish(); await vi.waitFor(() => expect(stored().reviewInfo?.summary).toBe("摘要"));
   });
 
-  it("runs text separately and resumes only the image stage after reopening history", async () => {
+  it.each(["review", "reviewText"] as const)("runs %s as text-only and waits for an explicit image-stage click even after reopening", async action => {
     fixtures.files.set("settings.json", { ...(fixtures.files.get("settings.json") as object), imageReview: true, modelVisionCapable: true });
     const result = { article, markdown: "已确认正文\n" + article.markdown, summary: "保留的摘要", imageDecisions: imageInventory(article.markdown, article.url), imagesReviewed: 0, imageWarnings: [], metadataAccepted: [] };
     vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_a, _s, _m, options) => {
       expect(options?.textOnly).toBe(true); options?.onTextReviewed?.(result); return result;
     });
-    await launch(); await scrape(); await chooseAuto(); click("reviewText"); await ready();
+    await launch(); await scrape(); await chooseAuto(); click(action); await ready();
     expect(stored().reviewCheckpoint).toMatchObject({ stage: "images", status: "paused" });
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     expect(document.querySelector('[data-role="textStageState"]')!.textContent).toBe("已完成");
     expect(document.querySelector('[data-role="imageStageState"]')!.textContent).toBe("待继续");
+    expect(reviewArticleDetailed).toHaveBeenCalledOnce();
+    expect(reviewArticleDetailed).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ imageReview: true, modelVisionCapable: true, modelName: "test" }), expect.anything(), expect.objectContaining({ textOnly: true, resumeText: undefined }));
     fixtures.dialogs.at(-1)!.destroy(); await launch(); openHistoryArticle();
     expect(document.querySelector<HTMLButtonElement>('[data-action="review"]')!.hidden).toBe(true);
     expect(document.querySelector('[data-action="resumeImages"]')!.textContent).toBe("继续审阅");
+    expect(reviewArticleDetailed).toHaveBeenCalledOnce();
     vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_a, _s, _m, options) => {
+      expect(options?.textOnly).toBe(false);
       expect(options?.resumeText).toMatchObject({ markdown: result.markdown, summary: result.summary });
       return { ...result, imageDecisions: result.imageDecisions.map(item => ({ ...item, status: "reviewed" as const })), imagesReviewed: 1 };
     });
     localize(); click("resumeImages"); await ready();
     expect(stored().reviewCheckpoint).toMatchObject({ stage: "complete", status: "complete" });
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    fixtures.dialogs.at(-1)!.destroy(); await launch(); openHistoryArticle(); await ready();
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    click("save"); await ready();
+    expect(classifyArticle).toHaveBeenCalledOnce(); expect(localizeMarkdownImages).toHaveBeenCalledOnce();
     expect(ensureArticleDocument).toHaveBeenCalledOnce();
     expect(reviewArticleDetailed).toHaveBeenCalledTimes(2);
   });
@@ -841,7 +952,8 @@ describe("workbench regression", () => {
       expect(options?.resumeText?.linkRepair).toEqual(result.linkRepair);
       return { ...result, imageDecisions: result.imageDecisions.map(item => ({ ...item, status: "reviewed" as const })), imagesReviewed: 1 };
     });
-    click("review"); await ready();
+    click("resumeImages"); await ready();
+    expect(reviewArticleDetailed).toHaveBeenCalledTimes(2);
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toContain("引用待确认");
   });
@@ -857,7 +969,9 @@ describe("workbench regression", () => {
       expect(options?.resumeText?.imageDecisions[0].status).toBe("failed");
       return { ...result, imageDecisions: result.imageDecisions.map(item => ({ ...item, status: "reviewed" as const })), imagesReviewed: 1, imageWarnings: [] };
     });
-    localize(); click("review"); await ready(); expect(ensureArticleDocument).toHaveBeenCalledOnce();
+    localize(); click("resumeImages"); await ready();
+    expect(reviewArticleDetailed).toHaveBeenCalledTimes(2); expect(ensureArticleDocument).not.toHaveBeenCalled();
+    click("save"); await ready(); expect(ensureArticleDocument).toHaveBeenCalledOnce();
   });
 
   it("loads old localized thumbnails and large images from SiYuan rather than the source site", async () => {
@@ -951,7 +1065,7 @@ describe("workbench regression", () => {
     expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("审阅完成");
   });
 
-  it("finishes and automatically saves with a retained HTML image without adding a new image status", async () => {
+  it("finishes with a retained HTML image and saves only on explicit click without adding a new image status", async () => {
     fixtures.files.set("settings.json", { ...(fixtures.files.get("settings.json") as object), imageReview: true, modelVisionCapable: true });
     const decisions = imageInventory(article.markdown, article.url).map(item => ({ ...item, status: "failed" as const,
       error: "模型暂不支持 text/html 图片格式", errorStage: "download" as const, description: "未能识别，默认保留" }));
@@ -964,6 +1078,8 @@ describe("workbench regression", () => {
     expect(document.querySelector<HTMLProgressElement>('[data-role="imageStageProgress"]')!.value).toBe(100);
     expect(document.querySelector<HTMLButtonElement>('[data-action="resumeImages"]')!.hidden).toBe(true);
     expect(document.querySelector(".noosphere__asset-state")!.textContent).toBe("识别失败");
+    expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(localizeMarkdownImages).not.toHaveBeenCalled();
+    click("save"); await ready();
     expect(ensureArticleDocument).toHaveBeenCalledOnce();
     expect(stored().savedDocumentId).toBe("20260101000000-eeeeeee");
     expect(localizeMarkdownImages).toHaveBeenCalledWith(article.markdown, article.url, ["https://example.com/photo.png"]);
@@ -1208,6 +1324,9 @@ describe("workbench regression", () => {
     fixtures.dialogs.at(-1)!.destroy(); finish();
     await vi.waitFor(() => expect(stored().markdown).toBe(result.markdown));
     await vi.waitFor(() => expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("审阅完成"), 7000));
+    expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("请点击“保存文章”"), 7000);
+    expect(fixtures.messages.mock.calls.some(([message]) => String(message).includes("已保存"))).toBe(false);
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
     expect(signal.aborted).toBe(false); expect(history().entries[0].draft.markdown).toBe(result.markdown);
     document.querySelector<HTMLButtonElement>("#entry")!.click(); await ready();
     expect(document.querySelector<HTMLElement>('[data-role="empty"]')!.hidden).toBe(false);
@@ -1522,7 +1641,18 @@ describe("workbench regression", () => {
     expect(vi.mocked(mountCategoryManager).mock.calls.at(-1)![2]().rootDocumentId).toBe('20260101000000-aaaaaaa');
     expect(stored().markdown).toBe(previous);
   });
-  it("waits for the entire review including image processing before automatic saving", async () => {
+  it("never classifies or writes a completed text review, including reopened history, until save is clicked", async () => {
+    localize(); vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(completedReview());
+    await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    expect(stored().savedDocumentId).toBe("");
+    fixtures.dialogs.at(-1)!.destroy(); await launch(); openHistoryArticle(); await ready();
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    click("save"); await ready();
+    expect(classifyArticle).toHaveBeenCalledOnce(); expect(localizeMarkdownImages).toHaveBeenCalledOnce();
+    expect(ensureArticleDocument).toHaveBeenCalledOnce(); expect(appendArticle).not.toHaveBeenCalled();
+  });
+  it("waits for explicit saving after the entire review completes", async () => {
     let finish!: () => void; const result = completedReview(); localize();
     vi.mocked(reviewArticleDetailed).mockImplementationOnce(async (_a, _s, _m, options) => {
       options?.onTextReviewed?.(result);
@@ -1532,6 +1662,8 @@ describe("workbench regression", () => {
     await vi.waitFor(() => expect(finish).toBeDefined());
     expect(ensureArticleDocument).not.toHaveBeenCalled();
     finish(); await ready();
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    click("save"); await ready();
     expect(ensureArticleDocument).toHaveBeenCalledOnce(); expect(appendArticle).not.toHaveBeenCalled();
     expect(stored().savedDocumentId).toBe("20260101000000-eeeeeee");
     expect(document.querySelector<HTMLElement>('[data-role="status"]')!.hidden).toBe(true);
@@ -1542,7 +1674,27 @@ describe("workbench regression", () => {
   it("keeps manual review separate from document saving", async () => {
     vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(completedReview());
     await launch(); await scrape(); click("review"); await ready();
-    expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(appendArticle).not.toHaveBeenCalled();
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    localize(); input("targetDocumentId", "20260101000000-bbbbbbb"); click("save"); await ready();
+    expect(appendArticle).toHaveBeenCalledOnce(); expect(localizeMarkdownImages).toHaveBeenCalledOnce();
+    expect(classifyArticle).not.toHaveBeenCalled(); expect(ensureArticleDocument).not.toHaveBeenCalled();
+  });
+  it.each(["auto", "manual"] as const)("allows explicit %s saving with pending images without starting vision", async mode => {
+    fixtures.files.set("settings.json", { ...(fixtures.files.get("settings.json") as object), imageReview: true, modelVisionCapable: true });
+    const result = { ...completedReview(), markdown: article.markdown, imageDecisions: imageInventory(article.markdown, article.url) };
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(result);
+    localize(); await launch(); await scrape();
+    if (mode === "auto") await chooseAuto();
+    else input("targetDocumentId", "20260101000000-bbbbbbb");
+    click("review"); await ready();
+    expect(stored().reviewCheckpoint).toMatchObject({ stage: "images", status: "paused" });
+    for (const operation of [classifyArticle, localizeMarkdownImages, ensureArticleDocument, appendArticle]) expect(operation).not.toHaveBeenCalled();
+    expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
+    click("save"); await ready();
+    expect(reviewArticleDetailed).toHaveBeenCalledOnce();
+    expect(localizeMarkdownImages).toHaveBeenCalledOnce();
+    expect(mode === "auto" ? ensureArticleDocument : appendArticle).toHaveBeenCalledOnce();
+    expect(stored().imageDecisions[0].status).toBe("pending");
   });
   it("retains unresolved photos through native edits and inserts at the chosen cursor without automatic saving", async () => {
     const result = { ...completedReview(), markdown: "已审阅文字\n\n图【图片引用待确认】", linkRepair: { attempts: 3, unresolved: 1 },
@@ -1553,7 +1705,7 @@ describe("workbench regression", () => {
     expect(stored().article?.markdown).toBe(article.markdown);
     expect(stored().markdown).toBe(result.markdown);
     expect(stored().imageDecisions[0]).toMatchObject({ unplaced: true, remove: false, url: "https://example.com/photo.png" });
-    expect(document.querySelector('[data-role="statusText"]')?.textContent || document.body.textContent).toContain("未自动保存");
+    expect(document.querySelector('[data-role="statusText"]')?.textContent || document.body.textContent).toContain("请确认后点击“保存文章”");
     fixtures.dialogs.at(-1)!.destroy(); document.querySelector<HTMLButtonElement>("#entry")!.click(); openHistoryArticle();
     expect(document.querySelector(".noosphere__asset-state")!.textContent).toBe("待定位");
     expect(document.querySelector<HTMLElement>('[data-role="assetToolbar"]')!.hidden).toBe(true);
@@ -1694,10 +1846,15 @@ describe("workbench regression", () => {
     finish(); await ready(); expect(ensureArticleDocument).not.toHaveBeenCalled();
     click("save"); await ready(); expect(ensureArticleDocument).toHaveBeenCalledOnce();
   });
-  it("requires a valid anchor before sending a review request", async () => {
+  it("does not validate the classification anchor until explicit saving", async () => {
+    vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(completedReview());
+    await launch(); await scrape(); await chooseAuto(); vi.mocked(locateDocument).mockClear();
     vi.mocked(locateDocument).mockRejectedValueOnce(new Error("锚点无效"));
-    await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
-    expect(reviewArticleDetailed).not.toHaveBeenCalled(); expect(ensureArticleDocument).not.toHaveBeenCalled();
+    click("review"); await ready();
+    expect(reviewArticleDetailed).toHaveBeenCalledOnce(); expect(locateDocument).not.toHaveBeenCalled();
+    click("save"); await ready();
+    expect(locateDocument).toHaveBeenCalledOnce(); expect(ensureArticleDocument).not.toHaveBeenCalled();
+    expect(fixtures.messages).toHaveBeenCalledWith("保存失败：锚点无效", 7000, "error");
   });
   it("releases a failed classification and lets manual saving proceed without the model", async () => {
     localize(); vi.mocked(classifyArticle).mockRejectedValueOnce(new Error("HTTP 429 quota exceeded"));
@@ -1722,10 +1879,11 @@ describe("workbench regression", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(localizeMarkdownImages).not.toHaveBeenCalled();
   });
-  it("releases post-review automatic saving on a 429 without losing the completed review", async () => {
+  it("releases explicit post-review saving on a 429 without losing the completed review", async () => {
     vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(completedReview());
     vi.mocked(classifyArticle).mockRejectedValueOnce(new Error("HTTP 429 quota exceeded"));
     await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
+    expect(classifyArticle).not.toHaveBeenCalled(); click("save"); await ready();
     expect(stored().markdown).toBe("已完成的审阅正文");
     expect(stored().reviewCheckpoint?.saveFailed).toBe(true); expect(stored().saveMode).toBe("manual");
     expect(ensureArticleDocument).not.toHaveBeenCalled(); expect(localizeMarkdownImages).not.toHaveBeenCalled();
@@ -1750,17 +1908,18 @@ describe("workbench regression", () => {
     expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("503"), 7000, "error");
   });
 
-  it("retains the completed review and allows retrying a failed automatic save", async () => {
+  it("retains the completed review and allows retrying a failed explicit save", async () => {
     localize(); vi.mocked(reviewArticleDetailed).mockResolvedValueOnce(completedReview());
     vi.mocked(ensureArticleDocument).mockRejectedValueOnce(new Error("写入失败"));
     await launch(); await scrape(); await chooseAuto(); click("review"); await ready();
+    expect(ensureArticleDocument).not.toHaveBeenCalled(); click("save"); await ready();
     expect(stored().markdown).toBe("已完成的审阅正文"); expect(stored().textReviewed).toBe(true);
     expect(document.querySelector<HTMLButtonElement>('[data-action="save"]')!.disabled).toBe(false);
-    expect(fixtures.messages).toHaveBeenCalledWith(expect.stringContaining("自动保存失败"), 7000, "error");
-    expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("自动保存失败");
+    expect(fixtures.messages).toHaveBeenCalledWith("保存失败：写入失败", 7000, "error");
+    expect(document.querySelector('[data-role="reviewProgressLabel"]')!.textContent).toBe("审阅完成");
     expect(stored().reviewCheckpoint?.saveFailed).toBe(true);
     fixtures.dialogs.at(-1)!.destroy(); await launch(); openHistoryArticle();
-    expect(document.querySelector('[data-role="reviewRecovery"]')!.textContent).toContain("自动保存失败");
+    expect(document.querySelector('[data-role="reviewRecovery"]')!.textContent).toContain("保存失败");
     click("save"); await ready();
     expect(stored().reviewCheckpoint?.saveFailed).toBe(false);
     expect(document.querySelector<HTMLElement>('[data-role="reviewRecovery"]')!.hidden).toBe(true);

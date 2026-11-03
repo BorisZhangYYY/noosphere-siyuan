@@ -19,7 +19,7 @@ Capture web articles in SiYuan, optionally review them with AI, edit them with t
 1. Install and enable the plugin, then click the globe icon in SiYuan's top toolbar.
 2. Open **Settings** at the top right and enter your **Firecrawl API key**. Configure a text model and an optional vision model for AI features.
 3. Paste a URL and click **Capture Article**. To change the text, click **Edit**, then **Confirm** when finished.
-4. Optionally choose a review perspective, output language and article format, then click **AI Review**. You can also save the original directly.
+4. Optionally choose a review perspective, output language and article format, then click **AI Review** to review the text. Image review starts only when you click its separate stage button. You can also save the original directly.
 5. Under **Save Destination**, choose **Manual**, enter the **document ID** copied from SiYuan's document menu, and click **Save Article**. For automatic filing, follow the steps below.
 
 The workbench opens with an empty capture page. Open previous articles from **History** to continue editing or saving. Capture shows its current stage and elapsed time below the URL; reopening an active capture or review resumes its existing progress.
@@ -32,7 +32,7 @@ Create categories first. ZhiLiu uses their names, full paths and descriptions to
 
 1. Open **Classification Configuration** at the far right of the workbench tabs. Enter a **notebook or root-document ID**, optionally enable **Automatically create and maintain category directories**, and click **Save**.
 2. Under **Category Management**, click **Add Category**, fill in the name, parent category and description, then click **Create and Sync**. Write the description yourself or generate it with AI; it is written to SiYuan only after you confirm synchronization.
-3. Return to **Current Article**, switch the save mode to **Automatic Classification**, and click **AI Review**. Once text and image review finish, the article is filed automatically without another save click.
+3. Return to **Current Article**, switch the save mode to **Automatic Classification**, and optionally review or edit the article. Click **Save Article** to classify and file it. Finishing a review does not save automatically.
 
 Descriptions define what each category accepts. Edit them in Category Management or the SiYuan document; changes apply to the next classification. Only categories within the selected root are considered. If no category fits, the article is saved directly under the root. If the model is rate-limited, unavailable, or times out, the draft is retained and saving switches to a manually specified destination.
 
@@ -43,11 +43,11 @@ With directory maintenance enabled, category pages show clickable, nested direct
 - **Review and language**: Follow the SiYuan interface language, keep the source language, or choose Simplified Chinese or English. Built-in perspectives are read-only; you can add custom perspectives.
 - **Thinking and waiting**: MiniMax, Kimi Code, and DeepSeek reasoning events are distinguished from article text and heartbeats. Ongoing reasoning or text extends the streaming deadline; ten minutes without generation progress ends the request even if heartbeats continue. A ninety-second silence only warns. Non-streaming requests retain a roughly ten-minute limit. Thinking content is excluded from articles.
 - **Images**: Click to preview in read-only mode. While editing, click to select multiple images, double-click to preview, and use **Add** or **Remove** to adjust the body. Removed originals remain available. An individual broken, inaccessible, HTML, or unsupported image retains its original link without blocking review or saving; you do not need to remove it.
-- **Review stages and recovery**: The compact text → images list provides separate controls to re-review text or continue unfinished images. Reopen the article from History after an interruption and continue only unfinished images. Completed text and image decisions are retained; an incomplete text response retries the text stage.
+- **Review stages and recovery**: Text and image review require separate clicks. Finishing text review never starts images automatically. After an interruption, reopen the article from History and click the image-stage button to continue unfinished images. Completed text and image decisions are retained; an incomplete text response retries the text stage.
 - **Cancel review**: Before text review finishes, cancellation restores the previous draft. After text review finishes, cancellation only stops the remaining image review, keeping the text and completed image decisions for manual saving.
 - **Manual saving**: **Confirm** keeps your edits in the plugin; **Save Article** writes them to SiYuan. Saving appends to an existing document or sets the title of an empty unnamed document.
 - **Service errors**: Model and SiYuan write failures stop the operation immediately and show the code and reason. Image-source rate limits, server failures, and network interruptions also stop processing. Completed text, image decisions, and uploaded assets remain available for retry. Classification failures switch saving to a manually specified destination.
-- **Automatic saving**: Saving the same source again updates the existing article. Cancellation or review failure prevents automatic saving; a failed save keeps the reviewed draft for retry. Images or links marked for confirmation must be checked before saving manually.
+- **Classification when saving**: Even in **Automatic Classification** mode, classification and writing start only when you click **Save Article**. Saving the same source again updates the existing article. A failed save keeps the reviewed draft for retry. Images or links marked for confirmation must be checked before saving.
 - **History**: Closing the window, disabling or upgrading the plugin preserves records. If a SiYuan document is deleted, its article remains available in history for saving again.
 
 See the [Changelog](https://github.com/BorisZhangYYY/noosphere-siyuan/blob/main/CHANGELOG.md) for version changes.

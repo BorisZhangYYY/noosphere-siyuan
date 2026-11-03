@@ -7,6 +7,7 @@ import { composeArticle, sourceMetadata, stripSourceMetadata } from "./compose";
 import { imageIdentity, localAssetPath, resolveImageReference } from "../images/reference";
 import type { ImageDecision } from "../review/images";
 import { previewUrl, type MarkdownRenderer } from "./preview";
+import { replaceImageAssetRefs } from "../images/localize";
 
 const METADATA = "data-noosphere-metadata";
 
@@ -30,9 +31,17 @@ const BLOCKS = [
 
 /** 原生块 DOM 保留格式属性，拒绝脚本、事件处理器和网页嵌入。 */
 export function sanitizeBlockDOM(html: string): string {
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true, svg: true },
+  const safe = DOMPurify.sanitize(html, { USE_PROFILES: { html: true, svg: true },
     ADD_ATTR: ["contenteditable", "spellcheck", "updated", "fold"],
     FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"], FORBID_ATTR: ["srcset"] });
+  const container = document.createElement("div"); container.innerHTML = safe;
+  // 旧历史可能只剩可显示的 src；在恢复与导入边界补齐内核引用，避免再次保存为空图片。
+  container.querySelectorAll<HTMLImageElement>('[data-type="img"] img[src]').forEach(img => {
+    if (img.getAttribute("data-src")) return;
+    const source = img.getAttribute("src")!;
+    img.setAttribute("data-src", localAssetPath(source)?.replace(/^\//, "") || source);
+  });
+  return container.innerHTML;
 }
 
 /** 来源作为系统管理的独立块插入；编辑和再次导入不会重复增加来源。 */
@@ -58,13 +67,14 @@ export function localizeEditorState(state: ArticleEditorState, markdown: string,
       const local = assets[raw] || assets[raw.replace(/^\//, "")];
       if (!local) continue;
       img.setAttribute("src", local);
-      img.removeAttribute("data-src");
+      // src 只用于前端显示；Lute 与内核用 data-src 持久化图片引用，不能删除。
+      img.setAttribute("data-src", local);
       const wrapper = img.closest<HTMLElement>('[data-type="img"]');
       wrapper?.querySelectorAll<HTMLElement>('[data-src]').forEach(node => node.setAttribute("data-src", local));
     }
     return container.innerHTML;
   };
-  return { ...state, markdown, blockDOM: updateDOM(state.blockDOM),
+  return { ...state, markdown, nativeMarkdown: replaceImageAssetRefs(state.nativeMarkdown, assets), blockDOM: updateDOM(state.blockDOM),
     ...(state.fullBlockDOM ? { fullBlockDOM: updateDOM(state.fullBlockDOM) } : {}) };
 }
 
